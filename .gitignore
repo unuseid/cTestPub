@@ -4,3 +4,4 @@ target/
 *.jar
 .idea/
 *.iml
+test-data/

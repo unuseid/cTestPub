@@ -1,66 +1,55 @@
 package com.quadrant;
 
 /**
- * Holds the failure count for each of the four quadrants of a tested object.
+ * Failure counts per quadrant for a tested rectangular object.
  *
- * Quadrant layout:
- *   cols [0, midCol)        cols [midCol, width)
- *   +-------------------+-------------------+
- *   |    TOP-LEFT       |    TOP-RIGHT      |  rows [0, midRow)
- *   +-------------------+-------------------+
- *   |   BOTTOM-LEFT     |   BOTTOM-RIGHT    |  rows [midRow, height)
- *   +-------------------+-------------------+
+ * Quadrant layout (width and height are guaranteed even):
  *
- * For odd dimensions the right/bottom half receives the extra column/row.
+ *   cols [0, midCol)          cols [midCol, width)
+ *   +-----------------------+------------------------+
+ *   |      TOP-LEFT         |      TOP-RIGHT         |  rows [0, midRow)
+ *   +-----------------------+------------------------+
+ *   |     BOTTOM-LEFT       |     BOTTOM-RIGHT       |  rows [midRow, height)
+ *   +-----------------------+------------------------+
+ *
+ * Failure counts use {@code long} because the standard size (98304 x 131072)
+ * can produce up to ~12.8 billion failures, exceeding {@link Integer#MAX_VALUE}.
  */
-public class QuadrantResult {
-
-    private final int width;
-    private final int height;
-    private final int topLeft;
-    private final int topRight;
-    private final int bottomLeft;
-    private final int bottomRight;
-
-    public QuadrantResult(int width, int height,
-                          int topLeft, int topRight,
-                          int bottomLeft, int bottomRight) {
-        this.width       = width;
-        this.height      = height;
-        this.topLeft     = topLeft;
-        this.topRight    = topRight;
-        this.bottomLeft  = bottomLeft;
-        this.bottomRight = bottomRight;
+public record QuadrantResult(
+        int  width,
+        int  height,
+        long topLeft,
+        long topRight,
+        long bottomLeft,
+        long bottomRight
+) {
+    public long total() {
+        return topLeft + topRight + bottomLeft + bottomRight;
     }
-
-    public int getTopLeft()     { return topLeft; }
-    public int getTopRight()    { return topRight; }
-    public int getBottomLeft()  { return bottomLeft; }
-    public int getBottomRight() { return bottomRight; }
-    public int getTotal()       { return topLeft + topRight + bottomLeft + bottomRight; }
 
     @Override
     public String toString() {
-        int midCol = width / 2;
+        int midCol = width  / 2;
         int midRow = height / 2;
-        String tlRange = String.format("cols[0,%d) rows[0,%d)",   midCol, midRow);
-        String trRange = String.format("cols[%d,%d) rows[0,%d)",  midCol, width, midRow);
-        String blRange = String.format("cols[0,%d) rows[%d,%d)",  midCol, midRow, height);
-        String brRange = String.format("cols[%d,%d) rows[%d,%d)", midCol, width, midRow, height);
-        return String.format(
-            "Object size : %d x %d  (midpoint col=%d, row=%d)%n" +
-            "+------------------------------+------------------------------+%n" +
-            "| TOP-LEFT     : %6d fails  | TOP-RIGHT    : %6d fails  |%n" +
-            "| %-28s | %-28s |%n" +
-            "+------------------------------+------------------------------+%n" +
-            "| BOTTOM-LEFT  : %6d fails  | BOTTOM-RIGHT : %6d fails  |%n" +
-            "| %-28s | %-28s |%n" +
-            "+------------------------------+------------------------------+%n" +
-            "  Total failures: %d / %d",
-            width, height, midCol, midRow,
-            topLeft,  topRight,  tlRange, trRange,
-            bottomLeft, bottomRight, blRange, brRange,
-            getTotal(), width * height
+        var tlRange = "cols[0,%d) rows[0,%d)".formatted(midCol, midRow);
+        var trRange = "cols[%d,%d) rows[0,%d)".formatted(midCol, width, midRow);
+        var blRange = "cols[0,%d) rows[%d,%d)".formatted(midCol, midRow, height);
+        var brRange = "cols[%d,%d) rows[%d,%d)".formatted(midCol, width, midRow, height);
+
+        return """
+                Object size : %,d x %,d  (midpoint col=%,d, row=%,d)
+                +--------------------------------+--------------------------------+
+                | TOP-LEFT     : %,14d  | TOP-RIGHT    : %,14d  |
+                | %-30s | %-30s |
+                +--------------------------------+--------------------------------+
+                | BOTTOM-LEFT  : %,14d  | BOTTOM-RIGHT : %,14d  |
+                | %-30s | %-30s |
+                +--------------------------------+--------------------------------+
+                  Total failures: %,d / %,d""".formatted(
+                width, height, midCol, midRow,
+                topLeft,    topRight,    tlRange, trRange,
+                bottomLeft, bottomRight, blRange, brRange,
+                total(), (long) width * height
         );
     }
 }
