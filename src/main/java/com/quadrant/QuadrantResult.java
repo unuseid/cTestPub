@@ -31,10 +31,10 @@ public record QuadrantResult(
     public String toString() {
         int midCol = width  / 2;
         int midRow = height / 2;
-        var tlRange = "cols[0,%d) rows[0,%d)".formatted(midCol, midRow);
-        var trRange = "cols[%d,%d) rows[0,%d)".formatted(midCol, width, midRow);
-        var blRange = "cols[0,%d) rows[%d,%d)".formatted(midCol, midRow, height);
-        var brRange = "cols[%d,%d) rows[%d,%d)".formatted(midCol, width, midRow, height);
+        String tlRange = "cols[0,%d) rows[0,%d)".formatted(midCol, midRow);
+        String trRange = "cols[%d,%d) rows[0,%d)".formatted(midCol, width, midRow);
+        String blRange = "cols[0,%d) rows[%d,%d)".formatted(midCol, midRow, height);
+        String brRange = "cols[%d,%d) rows[%d,%d)".formatted(midCol, width, midRow, height);
 
         return """
                 Object size : %,d x %,d  (midpoint col=%,d, row=%,d)

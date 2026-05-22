@@ -26,7 +26,7 @@ public class TestDataGenerator {
     public static final int STANDARD_HEIGHT = 131072;
 
     public static void main(String[] args) throws IOException {
-        var outDir = args.length > 0 ? Path.of(args[0]) : Path.of("test-data");
+        Path outDir = args.length > 0 ? Path.of(args[0]) : Path.of("test-data");
         Files.createDirectories(outDir);
 
         System.out.printf("Generating standard test data (%,d × %,d)%n",
@@ -34,7 +34,7 @@ public class TestDataGenerator {
         System.out.println("Output : " + outDir.toAbsolutePath());
         System.out.println();
 
-        var scenarios = new Scenario[] {
+        Scenario[] scenarios = new Scenario[] {
             new Scenario("All-pass",                   outDir.resolve("standard_all_pass.rle")),
             new Scenario("All-fail",                   outDir.resolve("standard_all_fail.rle")),
             new Scenario("Top-left quadrant fail",     outDir.resolve("standard_tl_fail.rle")),
@@ -79,7 +79,7 @@ public class TestDataGenerator {
     /** Generates an all-pass (all bits = 0) dataset. */
     public static void generateAllPass(int width, int height, Path output) throws IOException {
         validateDims(width, height);
-        try (var w = new RleWriter(output)) {
+        try (RleWriter w = new RleWriter(output)) {
             w.addRepeat(0x0000, patternCount(width, height));
         }
     }
@@ -87,7 +87,7 @@ public class TestDataGenerator {
     /** Generates an all-fail (all bits = 1) dataset. */
     public static void generateAllFail(int width, int height, Path output) throws IOException {
         validateDims(width, height);
-        try (var w = new RleWriter(output)) {
+        try (RleWriter w = new RleWriter(output)) {
             w.addRepeat(0xFFFF, patternCount(width, height));
         }
     }
@@ -115,7 +115,7 @@ public class TestDataGenerator {
         int leftPat  = failLeft ? 0xFFFF : 0x0000;  // pattern for left  half of fail rows
         int rightPat = failLeft ? 0x0000 : 0xFFFF;  // pattern for right half of fail rows
 
-        try (var w = new RleWriter(output)) {
+        try (RleWriter w = new RleWriter(output)) {
             if (failStart > 0) {
                 // Pass rows precede fail rows (failTop == false)
                 w.addRepeat(0x0000, passPatterns);
@@ -157,10 +157,10 @@ public class TestDataGenerator {
         if (failRate < 0.0 || failRate > 1.0)
             throw new IllegalArgumentException("failRate must be in [0.0, 1.0]: " + failRate);
 
-        int  ppr = width / 16;
-        var  rng = new Random(seed);
+        int    ppr = width / 16;
+        Random rng = new Random(seed);
 
-        try (var w = new RleWriter(output)) {
+        try (RleWriter w = new RleWriter(output)) {
             for (int row = 0; row < height; row++) {
                 w.addRepeat(randomPattern(rng, failRate), ppr);
             }
