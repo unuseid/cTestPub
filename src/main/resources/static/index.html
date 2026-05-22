@@ -21,6 +21,11 @@
       padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
     }
     button:hover { background: #c04050; }
+    button.demo {
+      background: #2a9d8f;
+    }
+    button.demo:hover { background: #1f7a6f; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
     #status { font-size: 12px; color: #888; }
     .legend-row {
       display: flex; align-items: center; gap: 8px;
@@ -66,6 +71,7 @@
 
   <div id="controls">
     <button onclick="loadData()">새로고침</button>
+    <button class="demo" id="demoBtn" onclick="generateDemo()">더미 데이터 생성</button>
     <label style="font-size:12px; color:#888;">
       <input type="checkbox" id="autoRefresh" onchange="toggleAuto()" checked>
       자동 새로고침 (5s)
@@ -296,6 +302,90 @@
     canvas.addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
     });
+
+    // ── demo data generator ────────────────────────────────────────────────────
+    // Produces wafer-map-style failure patterns:
+    //  sheet1 (TL) — Gaussian hot-spot upper-left + faint ring at r≈18
+    //  sheet2 (TR) — Gaussian hot-spot upper-right + edge-roll-off gradient
+    //  sheet3 (BL) — Donut / ring defect: low center, peak at r≈14, fades out
+    //  sheet4 (BR) — Two merged clusters in the lower quadrant
+    async function generateDemo() {
+      const btn = document.getElementById('demoBtn');
+      btn.disabled = true;
+      document.getElementById('status').textContent = '더미 데이터 생성 중...';
+
+      const CX = 25.5, CY = 25.5;   // wafer center (Cartesian coords)
+      const R  = 22;                 // wafer radius in grid units
+      const MAX = 9_800_000;         // peak failure count
+
+      // Gaussian bell: returns 0..1
+      function gauss(x, y, px, py, sigma) {
+        const d2 = (x - px) ** 2 + (y - py) ** 2;
+        return Math.exp(-d2 / (2 * sigma * sigma));
+      }
+
+      // Ring / donut: peak where |r - targetR| ≈ 0
+      function ring(x, y, targetR, sigma) {
+        const r  = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
+        const d  = r - targetR;
+        return Math.exp(-d * d / (2 * sigma * sigma));
+      }
+
+      // Normalised radial distance from center (0 = center, 1 = edge)
+      function radFrac(x, y) {
+        return Math.sqrt((x - CX) ** 2 + (y - CY) ** 2) / R;
+      }
+
+      const items = [];
+      for (let x = 1; x <= GRID; x++) {
+        for (let y = 1; y <= GRID; y++) {
+          // circular wafer mask
+          if ((x - CX) ** 2 + (y - CY) ** 2 > R * R) continue;
+
+          // sheet1: upper-left Gaussian (peak ≈ (13,38)) + faint concentric ring
+          const s1 = gauss(x, y, 13, 38, 7) * 0.80
+                   + ring(x, y, 18, 2.5)    * 0.20;
+
+          // sheet2: upper-right Gaussian (peak ≈ (38,38)) + edge roll-off
+          const edgeBoost = Math.pow(radFrac(x, y), 2.5);   // rises steeply near rim
+          const s2 = gauss(x, y, 38, 38, 7) * 0.65
+                   + edgeBoost              * 0.35;
+
+          // sheet3: donut — near-zero at center, peak ring at r≈14, then fades
+          // shaped by multiplying a rising ramp with a Gaussian fall-off
+          const rr = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
+          const ramp     = Math.min(rr / 14, 1);            // 0→1 up to r=14
+          const falloff  = Math.exp(-(Math.max(rr - 14, 0) ** 2) / (2 * 6 * 6));
+          const s3 = ramp * falloff;
+
+          // sheet4: two overlapping Gaussians in the lower half
+          const s4 = gauss(x, y, 18, 12, 6) * 0.55
+                   + gauss(x, y, 36, 14, 7) * 0.55;        // intentionally > 1 at overlap
+
+          items.push({
+            x, y,
+            sheet1: Math.round(MAX * Math.min(s1, 1)),
+            sheet2: Math.round(MAX * Math.min(s2, 1)),
+            sheet3: Math.round(MAX * Math.min(s3, 1)),
+            sheet4: Math.round(MAX * Math.min(s4, 1)),
+          });
+        }
+      }
+
+      try {
+        const resp = await fetch('/api/data', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(items),
+        });
+        if (!resp.ok) throw new Error('서버 응답 오류 ' + resp.status);
+        await loadData();   // refresh view with new data
+      } catch (e) {
+        document.getElementById('status').textContent = '오류: ' + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
 
     // ── init ───────────────────────────────────────────────────────────────────
     loadData();
