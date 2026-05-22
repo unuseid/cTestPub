@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Quadrant Failure Map</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 20px;
+      background: #12131a;
+      color: #dde;
+      font-family: 'Courier New', monospace;
+    }
+    h1 { margin: 0 0 12px; font-size: 20px; color: #e05a6f; letter-spacing: 1px; }
+    #controls {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 14px; flex-wrap: wrap;
+    }
+    button {
+      background: #e05a6f; color: #fff; border: none;
+      padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
+    }
+    button:hover { background: #c04050; }
+    #status { font-size: 12px; color: #888; }
+    .legend-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 14px; font-size: 11px; color: #999;
+    }
+    .legend-bar {
+      width: 180px; height: 14px;
+      background: linear-gradient(to right, #e8f4fd, #4a90d9, #ffffff, #e05a6f, #a00020);
+      border: 1px solid #333; border-radius: 2px;
+    }
+    #outer {
+      overflow: auto;
+      max-width: 100%;
+    }
+    #container { position: relative; display: inline-block; }
+    canvas { display: block; cursor: crosshair; }
+    #tooltip {
+      position: absolute;
+      background: rgba(10, 10, 20, 0.92);
+      color: #dde;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      pointer-events: none;
+      display: none;
+      white-space: pre;
+      border: 1px solid #444;
+      line-height: 1.6;
+      z-index: 10;
+    }
+    .quad-legend {
+      display: grid; grid-template-columns: 1fr 1fr;
+      width: 100px; border: 1px solid #444;
+      font-size: 10px; color: #777; margin-bottom: 14px;
+    }
+    .quad-legend div {
+      padding: 3px 5px; border: 1px solid #333; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>Quadrant Failure Map</h1>
+
+  <div id="controls">
+    <button onclick="loadData()">새로고침</button>
+    <label style="font-size:12px; color:#888;">
+      <input type="checkbox" id="autoRefresh" onchange="toggleAuto()" checked>
+      자동 새로고침 (5s)
+    </label>
+    <span id="status">로딩 중...</span>
+  </div>
+
+  <div class="legend-row">
+    <span>낮음</span>
+    <div class="legend-bar"></div>
+    <span>높음</span>
+    <span style="margin-left:16px; color:#555">— 데이터 없음: 어두운 배경</span>
+  </div>
+
+  <div style="font-size:11px; color:#666; margin-bottom:10px;">
+    각 셀 내 사분면 배치: TL=sheet1, TR=sheet2, BL=sheet3, BR=sheet4
+  </div>
+
+  <div id="outer">
+    <div id="container">
+      <canvas id="grid"></canvas>
+      <div id="tooltip"></div>
+    </div>
+  </div>
+
+  <script>
+    // ── constants ──────────────────────────────────────────────────────────────
+    const CELL   = 16;   // px per cell (quadrant sub-cell = 8px)
+    const QUAD   = CELL / 2;
+    const GRID   = 50;   // 50 × 50
+    const PAD_L  = 44;   // left padding for Y-axis labels
+    const PAD_B  = 30;   // bottom padding for X-axis labels
+    const PAD_T  = 8;    // top
+    const PAD_R  = 8;    // right
+
+    const W = PAD_L + GRID * CELL + PAD_R;
+    const H = PAD_T + GRID * CELL + PAD_B;
+
+    // ── state ──────────────────────────────────────────────────────────────────
+    let dataMap  = {};   // key: "x,y" → FailXY
+    let maxVal   = 1;    // avoid division by zero
+    let autoId   = null;
+
+    // ── color scale: near-white → blue → white → red ──────────────────────────
+    // 0       → #e8f4fd  (very light blue-white, clear "nothing here")
+    // 0.001–1 → blue (#4a90d9) at low, white at 0.5, red (#c0392b) at high
+    function getColor(val, max) {
+      if (max === 0 || val === 0) return '#e8f4fd';
+      const t = Math.min(val / max, 1);
+      let r, g, b;
+      if (t < 0.5) {
+        // blue (#4a,#90,#d9) → white (255,255,255)
+        const s = t * 2;
+        r = Math.round(0x4a + s * (255 - 0x4a));
+        g = Math.round(0x90 + s * (255 - 0x90));
+        b = Math.round(0xd9 + s * (255 - 0xd9));
+      } else {
+        // white (255,255,255) → deep red (#a0,0x00,0x20)
+        const s = (t - 0.5) * 2;
+        r = Math.round(255 + s * (0xa0 - 255));
+        g = Math.round(255 + s * (0x00 - 255));
+        b = Math.round(255 + s * (0x20 - 255));
+      }
+      return `rgb(${r},${g},${b})`;
+    }
+
+    // ── canvas drawing ─────────────────────────────────────────────────────────
+    function render() {
+      const canvas = document.getElementById('grid');
+      canvas.width  = W;
+      canvas.height = H;
+      const ctx = canvas.getContext('2d');
+
+      // background
+      ctx.fillStyle = '#1a1b26';
+      ctx.fillRect(0, 0, W, H);
+
+      // data cells
+      for (const key of Object.keys(dataMap)) {
+        const item = dataMap[key];
+        if (item.x < 1 || item.x > GRID || item.y < 1 || item.y > GRID) continue;
+
+        // Cartesian → canvas: x increases right, y increases UP
+        const cx = PAD_L + (item.x - 1) * CELL;
+        const cy = PAD_T + (GRID - item.y) * CELL;
+
+        ctx.fillStyle = getColor(item.sheet1, maxVal);
+        ctx.fillRect(cx,        cy,        QUAD, QUAD);
+
+        ctx.fillStyle = getColor(item.sheet2, maxVal);
+        ctx.fillRect(cx + QUAD, cy,        QUAD, QUAD);
+
+        ctx.fillStyle = getColor(item.sheet3, maxVal);
+        ctx.fillRect(cx,        cy + QUAD, QUAD, QUAD);
+
+        ctx.fillStyle = getColor(item.sheet4, maxVal);
+        ctx.fillRect(cx + QUAD, cy + QUAD, QUAD, QUAD);
+      }
+
+      // grid lines
+      ctx.strokeStyle = 'rgba(80,80,120,0.5)';
+      ctx.lineWidth   = 0.5;
+      for (let i = 0; i <= GRID; i++) {
+        const x = PAD_L + i * CELL;
+        const y = PAD_T + i * CELL;
+        ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, PAD_T + GRID * CELL); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L + GRID * CELL, y); ctx.stroke();
+      }
+
+      // sub-cell divider lines (every cell, faint)
+      ctx.strokeStyle = 'rgba(60,60,90,0.4)';
+      ctx.lineWidth   = 0.3;
+      for (const key of Object.keys(dataMap)) {
+        const item = dataMap[key];
+        if (item.x < 1 || item.x > GRID || item.y < 1 || item.y > GRID) continue;
+        const cx = PAD_L + (item.x - 1) * CELL;
+        const cy = PAD_T + (GRID - item.y) * CELL;
+        ctx.beginPath(); ctx.moveTo(cx + QUAD, cy); ctx.lineTo(cx + QUAD, cy + CELL); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx, cy + QUAD); ctx.lineTo(cx + CELL, cy + QUAD); ctx.stroke();
+      }
+
+      // axis tick labels — X axis (bottom)
+      ctx.fillStyle    = '#666';
+      ctx.font         = '9px monospace';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'top';
+      for (let x = 1; x <= GRID; x += 5) {
+        const px = PAD_L + (x - 1) * CELL + CELL / 2;
+        ctx.fillText(x, px, PAD_T + GRID * CELL + 4);
+      }
+
+      // axis tick labels — Y axis (left, bottom-to-top)
+      ctx.textAlign    = 'right';
+      ctx.textBaseline = 'middle';
+      for (let y = 1; y <= GRID; y += 5) {
+        const py = PAD_T + (GRID - y) * CELL + CELL / 2;
+        ctx.fillText(y, PAD_L - 4, py);
+      }
+
+      // axis name labels
+      ctx.fillStyle    = '#555';
+      ctx.font         = '10px monospace';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('X', PAD_L + GRID * CELL / 2, H - 1);
+
+      ctx.save();
+      ctx.translate(10, PAD_T + GRID * CELL / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textBaseline = 'top';
+      ctx.fillText('Y', 0, 0);
+      ctx.restore();
+    }
+
+    // ── data loading ───────────────────────────────────────────────────────────
+    async function loadData() {
+      try {
+        const resp  = await fetch('/api/data');
+        const items = await resp.json();
+
+        dataMap = {};
+        maxVal  = 0;
+        for (const item of items) {
+          dataMap[`${item.x},${item.y}`] = item;
+          const m = Math.max(item.sheet1, item.sheet2, item.sheet3, item.sheet4);
+          if (m > maxVal) maxVal = m;
+        }
+        if (maxVal === 0) maxVal = 1;
+
+        document.getElementById('status').textContent =
+          `${items.length}개 항목 | 최대 실패: ${maxVal.toLocaleString()}`;
+        render();
+      } catch (e) {
+        document.getElementById('status').textContent = '오류: ' + e.message;
+      }
+    }
+
+    // ── auto-refresh ───────────────────────────────────────────────────────────
+    function toggleAuto() {
+      if (document.getElementById('autoRefresh').checked) {
+        autoId = setInterval(loadData, 5000);
+      } else {
+        clearInterval(autoId);
+        autoId = null;
+      }
+    }
+
+    // ── tooltip on hover ───────────────────────────────────────────────────────
+    const canvas  = document.getElementById('grid');
+    const tooltip = document.getElementById('tooltip');
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx   = (e.clientX - rect.left) * (canvas.width  / rect.width);
+      const my   = (e.clientY - rect.top)  * (canvas.height / rect.height);
+
+      const gx = Math.floor((mx - PAD_L) / CELL) + 1;
+      const gy = GRID - Math.floor((my - PAD_T) / CELL);
+
+      if (gx < 1 || gx > GRID || gy < 1 || gy > GRID) {
+        tooltip.style.display = 'none';
+        return;
+      }
+
+      const item = dataMap[`${gx},${gy}`];
+      if (!item) {
+        tooltip.style.display = 'none';
+        return;
+      }
+
+      const total = item.sheet1 + item.sheet2 + item.sheet3 + item.sheet4;
+      tooltip.textContent =
+        `위치 (${gx}, ${gy})\n` +
+        `TL (sheet1) : ${item.sheet1.toLocaleString()}\n` +
+        `TR (sheet2) : ${item.sheet2.toLocaleString()}\n` +
+        `BL (sheet3) : ${item.sheet3.toLocaleString()}\n` +
+        `BR (sheet4) : ${item.sheet4.toLocaleString()}\n` +
+        `합계        : ${total.toLocaleString()}`;
+
+      // keep tooltip inside viewport
+      const tx = e.clientX - rect.left + 14;
+      const ty = e.clientY - rect.top  + 14;
+      tooltip.style.left    = tx + 'px';
+      tooltip.style.top     = ty + 'px';
+      tooltip.style.display = 'block';
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+    });
+
+    // ── init ───────────────────────────────────────────────────────────────────
+    loadData();
+    autoId = setInterval(loadData, 5000);
+  </script>
+</body>
+</html>
