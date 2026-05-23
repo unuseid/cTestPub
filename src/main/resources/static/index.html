@@ -19,32 +19,31 @@
     button {
       background: #e05a6f; color: #fff; border: none;
       padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
+      transition: background 0.15s;
     }
-    button:hover { background: #c04050; }
-    button.demo {
-      background: #2a9d8f;
+    button:hover    { background: #c04050; }
+    button.teal     { background: #2a9d8f; }
+    button.teal:hover { background: #1f7a6f; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #patternName {
+      font-size: 12px; color: #4db6ac; font-style: italic;
     }
-    button.demo:hover { background: #1f7a6f; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
     #status { font-size: 12px; color: #888; }
     .legend-row {
       display: flex; align-items: center; gap: 8px;
-      margin-bottom: 14px; font-size: 11px; color: #999;
+      margin-bottom: 12px; font-size: 11px; color: #999;
     }
     .legend-bar {
       width: 180px; height: 14px;
       background: linear-gradient(to right, #e8f4fd, #4a90d9, #ffffff, #e05a6f, #a00020);
       border: 1px solid #333; border-radius: 2px;
     }
-    #outer {
-      overflow: auto;
-      max-width: 100%;
-    }
+    #outer { overflow: auto; max-width: 100%; }
     #container { position: relative; display: inline-block; }
     canvas { display: block; cursor: crosshair; }
     #tooltip {
       position: absolute;
-      background: rgba(10, 10, 20, 0.92);
+      background: rgba(10,10,20,0.93);
       color: #dde;
       padding: 8px 12px;
       border-radius: 4px;
@@ -53,16 +52,8 @@
       display: none;
       white-space: pre;
       border: 1px solid #444;
-      line-height: 1.6;
+      line-height: 1.65;
       z-index: 10;
-    }
-    .quad-legend {
-      display: grid; grid-template-columns: 1fr 1fr;
-      width: 100px; border: 1px solid #444;
-      font-size: 10px; color: #777; margin-bottom: 14px;
-    }
-    .quad-legend div {
-      padding: 3px 5px; border: 1px solid #333; text-align: center;
     }
   </style>
 </head>
@@ -71,8 +62,9 @@
 
   <div id="controls">
     <button onclick="loadData()">새로고침</button>
-    <button class="demo" id="demoBtn" onclick="generateDemo()">더미 데이터 생성</button>
-    <label style="font-size:12px; color:#888;">
+    <button class="teal" id="demoBtn" onclick="generateDemo()">더미 데이터 생성</button>
+    <span id="patternName"></span>
+    <label style="font-size:12px; color:#888; margin-left:4px;">
       <input type="checkbox" id="autoRefresh" onchange="toggleAuto()" checked>
       자동 새로고침 (5s)
     </label>
@@ -83,11 +75,10 @@
     <span>낮음</span>
     <div class="legend-bar"></div>
     <span>높음</span>
-    <span style="margin-left:16px; color:#555">— 데이터 없음: 어두운 배경</span>
+    <span style="margin-left:16px; color:#444">데이터 없음: 빈 배경</span>
   </div>
-
-  <div style="font-size:11px; color:#666; margin-bottom:10px;">
-    각 셀 내 사분면 배치: TL=sheet1, TR=sheet2, BL=sheet3, BR=sheet4
+  <div style="font-size:11px; color:#555; margin-bottom:12px;">
+    셀 내 배치 — TL:sheet1 &nbsp;TR:sheet2 &nbsp;BL:sheet3 &nbsp;BR:sheet4
   </div>
 
   <div id="outer">
@@ -98,38 +89,36 @@
   </div>
 
   <script>
-    // ── constants ──────────────────────────────────────────────────────────────
-    const CELL   = 16;   // px per cell (quadrant sub-cell = 8px)
-    const QUAD   = CELL / 2;
-    const GRID   = 50;   // 50 × 50
-    const PAD_L  = 44;   // left padding for Y-axis labels
-    const PAD_B  = 30;   // bottom padding for X-axis labels
-    const PAD_T  = 8;    // top
-    const PAD_R  = 8;    // right
-
+    // ── layout constants ────────────────────────────────────────────────────────
+    const CELL  = 16;          // px per die cell
+    const QUAD  = CELL / 2;   // px per sub-quadrant
+    const GRID  = 50;          // 50 × 50 grid
+    const PAD_L = 44;
+    const PAD_B = 30;
+    const PAD_T = 8;
+    const PAD_R = 8;
     const W = PAD_L + GRID * CELL + PAD_R;
     const H = PAD_T + GRID * CELL + PAD_B;
 
-    // ── state ──────────────────────────────────────────────────────────────────
-    let dataMap  = {};   // key: "x,y" → FailXY
-    let maxVal   = 1;    // avoid division by zero
-    let autoId   = null;
+    // ── wafer geometry ──────────────────────────────────────────────────────────
+    const CX = 25.5, CY = 25.5, R = 22;   // wafer center and radius
 
-    // ── color scale: near-white → blue → white → red ──────────────────────────
-    // 0       → #e8f4fd  (very light blue-white, clear "nothing here")
-    // 0.001–1 → blue (#4a90d9) at low, white at 0.5, red (#c0392b) at high
+    // ── runtime state ───────────────────────────────────────────────────────────
+    let dataMap = {};
+    let maxVal  = 1;
+    let autoId  = null;
+
+    // ── color scale (blue → white → red) ───────────────────────────────────────
     function getColor(val, max) {
       if (max === 0 || val === 0) return '#e8f4fd';
       const t = Math.min(val / max, 1);
       let r, g, b;
       if (t < 0.5) {
-        // blue (#4a,#90,#d9) → white (255,255,255)
         const s = t * 2;
         r = Math.round(0x4a + s * (255 - 0x4a));
         g = Math.round(0x90 + s * (255 - 0x90));
         b = Math.round(0xd9 + s * (255 - 0xd9));
       } else {
-        // white (255,255,255) → deep red (#a0,0x00,0x20)
         const s = (t - 0.5) * 2;
         r = Math.round(255 + s * (0xa0 - 255));
         g = Math.round(255 + s * (0x00 - 255));
@@ -138,26 +127,27 @@
       return `rgb(${r},${g},${b})`;
     }
 
-    // ── canvas drawing ─────────────────────────────────────────────────────────
+    // ── rendering ───────────────────────────────────────────────────────────────
     function render() {
       const canvas = document.getElementById('grid');
       canvas.width  = W;
       canvas.height = H;
       const ctx = canvas.getContext('2d');
 
-      // background
+      // dark background
       ctx.fillStyle = '#1a1b26';
       ctx.fillRect(0, 0, W, H);
 
-      // data cells
+      // draw each die cell
       for (const key of Object.keys(dataMap)) {
         const item = dataMap[key];
         if (item.x < 1 || item.x > GRID || item.y < 1 || item.y > GRID) continue;
 
-        // Cartesian → canvas: x increases right, y increases UP
+        // Cartesian → canvas (y flipped)
         const cx = PAD_L + (item.x - 1) * CELL;
         const cy = PAD_T + (GRID - item.y) * CELL;
 
+        // ① Fill four sub-quadrants with NO gap between them
         ctx.fillStyle = getColor(item.sheet1, maxVal);
         ctx.fillRect(cx,        cy,        QUAD, QUAD);
 
@@ -169,55 +159,34 @@
 
         ctx.fillStyle = getColor(item.sheet4, maxVal);
         ctx.fillRect(cx + QUAD, cy + QUAD, QUAD, QUAD);
+
+        // ② Black border around the whole cell only (no internal dividers)
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth   = 1;
+        ctx.strokeRect(cx + 0.5, cy + 0.5, CELL - 1, CELL - 1);
       }
 
-      // grid lines
-      ctx.strokeStyle = 'rgba(80,80,120,0.5)';
-      ctx.lineWidth   = 0.5;
-      for (let i = 0; i <= GRID; i++) {
-        const x = PAD_L + i * CELL;
-        const y = PAD_T + i * CELL;
-        ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, PAD_T + GRID * CELL); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L + GRID * CELL, y); ctx.stroke();
-      }
-
-      // sub-cell divider lines (every cell, faint)
-      ctx.strokeStyle = 'rgba(60,60,90,0.4)';
-      ctx.lineWidth   = 0.3;
-      for (const key of Object.keys(dataMap)) {
-        const item = dataMap[key];
-        if (item.x < 1 || item.x > GRID || item.y < 1 || item.y > GRID) continue;
-        const cx = PAD_L + (item.x - 1) * CELL;
-        const cy = PAD_T + (GRID - item.y) * CELL;
-        ctx.beginPath(); ctx.moveTo(cx + QUAD, cy); ctx.lineTo(cx + QUAD, cy + CELL); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(cx, cy + QUAD); ctx.lineTo(cx + CELL, cy + QUAD); ctx.stroke();
-      }
-
-      // axis tick labels — X axis (bottom)
+      // axis tick labels — X (bottom)
       ctx.fillStyle    = '#666';
       ctx.font         = '9px monospace';
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'top';
       for (let x = 1; x <= GRID; x += 5) {
-        const px = PAD_L + (x - 1) * CELL + CELL / 2;
-        ctx.fillText(x, px, PAD_T + GRID * CELL + 4);
+        ctx.fillText(x, PAD_L + (x - 1) * CELL + CELL / 2, PAD_T + GRID * CELL + 4);
       }
 
-      // axis tick labels — Y axis (left, bottom-to-top)
+      // axis tick labels — Y (left, bottom-to-top in Cartesian)
       ctx.textAlign    = 'right';
       ctx.textBaseline = 'middle';
       for (let y = 1; y <= GRID; y += 5) {
-        const py = PAD_T + (GRID - y) * CELL + CELL / 2;
-        ctx.fillText(y, PAD_L - 4, py);
+        ctx.fillText(y, PAD_L - 4, PAD_T + (GRID - y) * CELL + CELL / 2);
       }
 
       // axis name labels
-      ctx.fillStyle    = '#555';
-      ctx.font         = '10px monospace';
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = '#555';
+      ctx.font      = '10px monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       ctx.fillText('X', PAD_L + GRID * CELL / 2, H - 1);
-
       ctx.save();
       ctx.translate(10, PAD_T + GRID * CELL / 2);
       ctx.rotate(-Math.PI / 2);
@@ -226,12 +195,11 @@
       ctx.restore();
     }
 
-    // ── data loading ───────────────────────────────────────────────────────────
+    // ── data loading ────────────────────────────────────────────────────────────
     async function loadData() {
       try {
         const resp  = await fetch('/api/data');
         const items = await resp.json();
-
         dataMap = {};
         maxVal  = 0;
         for (const item of items) {
@@ -240,7 +208,6 @@
           if (m > maxVal) maxVal = m;
         }
         if (maxVal === 0) maxVal = 1;
-
         document.getElementById('status').textContent =
           `${items.length}개 항목 | 최대 실패: ${maxVal.toLocaleString()}`;
         render();
@@ -249,7 +216,7 @@
       }
     }
 
-    // ── auto-refresh ───────────────────────────────────────────────────────────
+    // ── auto-refresh ─────────────────────────────────────────────────────────────
     function toggleAuto() {
       if (document.getElementById('autoRefresh').checked) {
         autoId = setInterval(loadData, 5000);
@@ -259,7 +226,7 @@
       }
     }
 
-    // ── tooltip on hover ───────────────────────────────────────────────────────
+    // ── tooltip ──────────────────────────────────────────────────────────────────
     const canvas  = document.getElementById('grid');
     const tooltip = document.getElementById('tooltip');
 
@@ -267,107 +234,184 @@
       const rect = canvas.getBoundingClientRect();
       const mx   = (e.clientX - rect.left) * (canvas.width  / rect.width);
       const my   = (e.clientY - rect.top)  * (canvas.height / rect.height);
-
-      const gx = Math.floor((mx - PAD_L) / CELL) + 1;
-      const gy = GRID - Math.floor((my - PAD_T) / CELL);
-
+      const gx   = Math.floor((mx - PAD_L) / CELL) + 1;
+      const gy   = GRID - Math.floor((my - PAD_T) / CELL);
       if (gx < 1 || gx > GRID || gy < 1 || gy > GRID) {
-        tooltip.style.display = 'none';
-        return;
+        tooltip.style.display = 'none'; return;
       }
-
       const item = dataMap[`${gx},${gy}`];
-      if (!item) {
-        tooltip.style.display = 'none';
-        return;
-      }
-
+      if (!item) { tooltip.style.display = 'none'; return; }
       const total = item.sheet1 + item.sheet2 + item.sheet3 + item.sheet4;
       tooltip.textContent =
         `위치 (${gx}, ${gy})\n` +
-        `TL (sheet1) : ${item.sheet1.toLocaleString()}\n` +
-        `TR (sheet2) : ${item.sheet2.toLocaleString()}\n` +
-        `BL (sheet3) : ${item.sheet3.toLocaleString()}\n` +
-        `BR (sheet4) : ${item.sheet4.toLocaleString()}\n` +
-        `합계        : ${total.toLocaleString()}`;
-
-      // keep tooltip inside viewport
-      const tx = e.clientX - rect.left + 14;
-      const ty = e.clientY - rect.top  + 14;
-      tooltip.style.left    = tx + 'px';
-      tooltip.style.top     = ty + 'px';
+        `TL sheet1 : ${item.sheet1.toLocaleString()}\n` +
+        `TR sheet2 : ${item.sheet2.toLocaleString()}\n` +
+        `BL sheet3 : ${item.sheet3.toLocaleString()}\n` +
+        `BR sheet4 : ${item.sheet4.toLocaleString()}\n` +
+        `합계      : ${total.toLocaleString()}`;
+      tooltip.style.left    = (e.clientX - rect.left + 14) + 'px';
+      tooltip.style.top     = (e.clientY - rect.top  + 14) + 'px';
       tooltip.style.display = 'block';
     });
+    canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 
-    canvas.addEventListener('mouseleave', () => {
-      tooltip.style.display = 'none';
-    });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DEMO DATA — wafer-map failure patterns
+    // Each pattern fn returns [s1, s2, s3, s4] in [0, 1] for a given (x, y).
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    // ── demo data generator ────────────────────────────────────────────────────
-    // Produces wafer-map-style failure patterns:
-    //  sheet1 (TL) — Gaussian hot-spot upper-left + faint ring at r≈18
-    //  sheet2 (TR) — Gaussian hot-spot upper-right + edge-roll-off gradient
-    //  sheet3 (BL) — Donut / ring defect: low center, peak at r≈14, fades out
-    //  sheet4 (BR) — Two merged clusters in the lower quadrant
+    // helpers shared by all patterns
+    function gauss(x, y, px, py, sigma) {
+      return Math.exp(-((x - px) ** 2 + (y - py) ** 2) / (2 * sigma * sigma));
+    }
+    function ringVal(x, y, targetR, sigma) {
+      const r = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
+      return Math.exp(-((r - targetR) ** 2) / (2 * sigma * sigma));
+    }
+    function edgeFrac(x, y) {
+      return Math.sqrt((x - CX) ** 2 + (y - CY) ** 2) / R;
+    }
+    function clamp(v) { return Math.min(Math.max(v, 0), 1); }
+
+    // ── pattern 0: classic hot-spots + donut ────────────────────────────────────
+    // sheet1: TL cluster + faint ring   sheet2: TR cluster + edge roll-off
+    // sheet3: donut (low center)        sheet4: two merged clusters at bottom
+    function patternClassic(x, y) {
+      const s1 = clamp(gauss(x, y, 13, 38, 7) * 0.80 + ringVal(x, y, 18, 2.5) * 0.20);
+      const s2 = clamp(gauss(x, y, 38, 38, 7) * 0.65 + Math.pow(edgeFrac(x, y), 2.5) * 0.35);
+      const rr    = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
+      const ramp  = Math.min(rr / 14, 1);
+      const fall  = Math.exp(-(Math.max(rr - 14, 0) ** 2) / (2 * 6 * 6));
+      const s3 = clamp(ramp * fall);
+      const s4 = clamp(gauss(x, y, 18, 12, 6) * 0.55 + gauss(x, y, 36, 14, 7) * 0.55);
+      return [s1, s2, s3, s4];
+    }
+
+    // ── pattern 1: crossed diagonal scratches ───────────────────────────────────
+    // Two fine lines cross the wafer: \ and /  Each sheet has a different blend.
+    function patternScratch(x, y) {
+      const sigma = 2.2;
+      const d1 = Math.exp(-((y - x) ** 2)           / (2 * sigma * sigma)); // y = x  (\)
+      const d2 = Math.exp(-((y - (51 - x)) ** 2)    / (2 * sigma * sigma)); // y = 51-x (/)
+      // base low-level noise that rises slightly at edge
+      const base = 0.06 + edgeFrac(x, y) * 0.06;
+      const s1 = clamp(base + d1 * 0.90);
+      const s2 = clamp(base + d2 * 0.90);
+      const s3 = clamp(base + d1 * 0.55 + d2 * 0.35);
+      const s4 = clamp(base + d2 * 0.55 + d1 * 0.35);
+      return [s1, s2, s3, s4];
+    }
+
+    // ── pattern 2: concentric rings / bulls-eye ─────────────────────────────────
+    // Oscillating failure bands radiating from center; each sheet is offset.
+    function patternBullseye(x, y) {
+      const rr    = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
+      const period = 7.5;  // ring spacing
+      function wave(offset) {
+        return (Math.cos((rr + offset) * Math.PI / period) + 1) / 2;
+      }
+      // Amplitude tapers to 0 at center (wafer has less variation near center)
+      const env = clamp(rr / 6);
+      const s1 = clamp(wave(0)   * env);
+      const s2 = clamp(wave(period * 0.5) * env);  // half-period offset → inverted rings
+      const s3 = clamp(wave(period * 0.25) * env);
+      const s4 = clamp(wave(period * 0.75) * env);
+      return [s1, s2, s3, s4];
+    }
+
+    // ── pattern 3: linear process gradients ─────────────────────────────────────
+    // Each sheet has a smooth directional gradient (simulates systematic process drift).
+    function patternGradient(x, y) {
+      const nx = (x - 1) / 49;   // 0 (left) → 1 (right)
+      const ny = (y - 1) / 49;   // 0 (bottom) → 1 (top)
+      // slight edge darkening so the pattern fades at the wafer rim
+      const vignette = clamp(1 - edgeFrac(x, y) * 0.25);
+      const s1 = clamp(nx * vignette);                        // L → R
+      const s2 = clamp((1 - ny) * vignette);                  // top → bottom (top = high)
+      const s3 = clamp((nx + (1 - ny)) / 2 * vignette);      // NW diagonal high
+      const s4 = clamp(((1 - nx) + ny) / 2 * vignette);      // SE diagonal high
+      return [s1, s2, s3, s4];
+    }
+
+    // ── pattern 4: angular sector defects ───────────────────────────────────────
+    // Smooth pie-slice lobes; each sheet peaks in a different compass direction.
+    // Amplitude rises from 0 at center to max at rim (edge defect signature).
+    function patternSector(x, y) {
+      const angle = Math.atan2(y - CY, x - CX);   // −π … +π  (Cartesian, CCW)
+      const ef    = Math.pow(edgeFrac(x, y), 1.2); // rises toward edge
+      function lobe(peakAngle) {
+        const diff = Math.abs(((angle - peakAngle + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
+        return Math.cos(Math.min(diff, Math.PI / 2)) ** 2;   // 90° soft sector
+      }
+      const s1 = clamp(lobe(0)           * ef);   // right  (E)
+      const s2 = clamp(lobe(Math.PI / 2) * ef);   // top    (N)
+      const s3 = clamp(lobe(Math.PI)     * ef);   // left   (W)
+      const s4 = clamp(lobe(-Math.PI/2)  * ef);   // bottom (S)
+      return [s1, s2, s3, s4];
+    }
+
+    // ── pattern 5: scattered micro-clusters ─────────────────────────────────────
+    // Many small Gaussian blobs; distinct seed per sheet gives independent maps.
+    function patternClusters(x, y) {
+      const c1 = [[10,40],[28,44],[18,30],[35,38],[6,22]];
+      const c2 = [[42,42],[32,28],[20,18],[45,15],[38,30]];
+      const c3 = [[8,14],[22,8],[40,10],[30,20],[14,26]];
+      const c4 = [[36,36],[12,42],[44,28],[20,44],[30,10]];
+      function sumGauss(x, y, centers) {
+        return clamp(centers.reduce((acc, [px, py]) => acc + gauss(x, y, px, py, 4.5), 0));
+      }
+      return [sumGauss(x,y,c1), sumGauss(x,y,c2), sumGauss(x,y,c3), sumGauss(x,y,c4)];
+    }
+
+    // ── pattern 6: edge & center split ──────────────────────────────────────────
+    // Two failure populations: a hot inner disk and a hot outer ring, separated
+    // by a clear band. Each sheet has a different inner/outer ratio.
+    function patternEdgeCenter(x, y) {
+      const rr     = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
+      const inner  = Math.exp(-(rr ** 2) / (2 * 6 * 6));           // center blob
+      const outer  = ringVal(x, y, R * 0.85, 2.5);                 // rim ring
+      const s1 = clamp(inner * 0.9 + outer * 0.1);
+      const s2 = clamp(inner * 0.4 + outer * 0.6);
+      const s3 = clamp(inner * 0.1 + outer * 0.9);
+      const s4 = clamp(inner * 0.6 + outer * 0.4);
+      return [s1, s2, s3, s4];
+    }
+
+    // ── pattern registry ────────────────────────────────────────────────────────
+    const PATTERNS = [
+      { name: '웨이퍼 결함 클래식 (hot-spot + donut)', fn: patternClassic    },
+      { name: '대각선 스크래치 (crossed scratches)',   fn: patternScratch    },
+      { name: '동심원 불스아이 (concentric rings)',    fn: patternBullseye   },
+      { name: '공정 그래디언트 (directional drift)',   fn: patternGradient   },
+      { name: '방위각 섹터 결함 (compass lobes)',      fn: patternSector     },
+      { name: '산발성 마이크로 클러스터',               fn: patternClusters   },
+      { name: '중심·엣지 분리 결함',                   fn: patternEdgeCenter },
+    ];
+
+    // ── generate & post demo data ────────────────────────────────────────────────
     async function generateDemo() {
       const btn = document.getElementById('demoBtn');
       btn.disabled = true;
+
+      // pick a random pattern
+      const idx  = Math.floor(Math.random() * PATTERNS.length);
+      const pat  = PATTERNS[idx];
+      document.getElementById('patternName').textContent = `[ ${pat.name} ]`;
       document.getElementById('status').textContent = '더미 데이터 생성 중...';
 
-      const CX = 25.5, CY = 25.5;   // wafer center (Cartesian coords)
-      const R  = 22;                 // wafer radius in grid units
-      const MAX = 9_800_000;         // peak failure count
-
-      // Gaussian bell: returns 0..1
-      function gauss(x, y, px, py, sigma) {
-        const d2 = (x - px) ** 2 + (y - py) ** 2;
-        return Math.exp(-d2 / (2 * sigma * sigma));
-      }
-
-      // Ring / donut: peak where |r - targetR| ≈ 0
-      function ring(x, y, targetR, sigma) {
-        const r  = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
-        const d  = r - targetR;
-        return Math.exp(-d * d / (2 * sigma * sigma));
-      }
-
-      // Normalised radial distance from center (0 = center, 1 = edge)
-      function radFrac(x, y) {
-        return Math.sqrt((x - CX) ** 2 + (y - CY) ** 2) / R;
-      }
-
+      const MAX   = 9_800_000;
       const items = [];
+
       for (let x = 1; x <= GRID; x++) {
         for (let y = 1; y <= GRID; y++) {
-          // circular wafer mask
-          if ((x - CX) ** 2 + (y - CY) ** 2 > R * R) continue;
-
-          // sheet1: upper-left Gaussian (peak ≈ (13,38)) + faint concentric ring
-          const s1 = gauss(x, y, 13, 38, 7) * 0.80
-                   + ring(x, y, 18, 2.5)    * 0.20;
-
-          // sheet2: upper-right Gaussian (peak ≈ (38,38)) + edge roll-off
-          const edgeBoost = Math.pow(radFrac(x, y), 2.5);   // rises steeply near rim
-          const s2 = gauss(x, y, 38, 38, 7) * 0.65
-                   + edgeBoost              * 0.35;
-
-          // sheet3: donut — near-zero at center, peak ring at r≈14, then fades
-          // shaped by multiplying a rising ramp with a Gaussian fall-off
-          const rr = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
-          const ramp     = Math.min(rr / 14, 1);            // 0→1 up to r=14
-          const falloff  = Math.exp(-(Math.max(rr - 14, 0) ** 2) / (2 * 6 * 6));
-          const s3 = ramp * falloff;
-
-          // sheet4: two overlapping Gaussians in the lower half
-          const s4 = gauss(x, y, 18, 12, 6) * 0.55
-                   + gauss(x, y, 36, 14, 7) * 0.55;        // intentionally > 1 at overlap
-
+          if ((x - CX) ** 2 + (y - CY) ** 2 > R * R) continue;  // wafer mask
+          const [s1, s2, s3, s4] = pat.fn(x, y);
           items.push({
             x, y,
-            sheet1: Math.round(MAX * Math.min(s1, 1)),
-            sheet2: Math.round(MAX * Math.min(s2, 1)),
-            sheet3: Math.round(MAX * Math.min(s3, 1)),
-            sheet4: Math.round(MAX * Math.min(s4, 1)),
+            sheet1: Math.round(MAX * s1),
+            sheet2: Math.round(MAX * s2),
+            sheet3: Math.round(MAX * s3),
+            sheet4: Math.round(MAX * s4),
           });
         }
       }
@@ -379,7 +423,7 @@
           body:    JSON.stringify(items),
         });
         if (!resp.ok) throw new Error('서버 응답 오류 ' + resp.status);
-        await loadData();   // refresh view with new data
+        await loadData();
       } catch (e) {
         document.getElementById('status').textContent = '오류: ' + e.message;
       } finally {
@@ -387,7 +431,7 @@
       }
     }
 
-    // ── init ───────────────────────────────────────────────────────────────────
+    // ── init ────────────────────────────────────────────────────────────────────
     loadData();
     autoId = setInterval(loadData, 5000);
   </script>
