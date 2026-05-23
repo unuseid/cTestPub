@@ -344,12 +344,13 @@
 
     // ── Pattern 3: steep top-edge gradient ───────────────────────────────────────
     // Lower half of wafer is white (ramp = 0 for ny ≤ 0).
-    // Power 1.8 gives slow start then fast rise near the top rim.
+    // Power 2.5 concentrates colour in the top ~30% of the wafer height,
+    // giving fewer visible bands than a gentler exponent.
     function patternGradient(x, y) {
       const nx  = (x - CX) / R;
       const ny  = (y - CY) / R;
       const vig = clamp(1 - edgeFrac(x,y) * 0.20);
-      const ramp = clamp(Math.pow(Math.max(ny, 0), 1.8) * vig * 0.92);
+      const ramp = clamp(Math.pow(Math.max(ny, 0), 2.5) * vig * 0.95);
       return [
         clamp(ramp + nx *  DMAX * vig),
         clamp(ramp - nx *  DMAX * vig),
@@ -358,21 +359,26 @@
       ];
     }
 
-    // ── Pattern 4: rim sector defect (ef^2, interior white) ─────────────────────
-    // ef^2 concentrates signal at the very edge; centre stays white.
+    // ── Pattern 4: rim sector defect (ef^4, cardinal arcs) ───────────────────────
+    // ef^4 keeps interior white (r<70%→ ef<0.24 → ~white) and concentrates signal
+    // at the outer ~25% of radius.  All 4 sheets share 85% of the dominant sector
+    // signal so in-cell colour variation is subtle (≤ orange→red), not red vs blue.
     function patternSector(x, y) {
-      const ef    = Math.pow(edgeFrac(x, y), 2.0);
-      const base  = ef * 0.58;
+      const ef    = Math.pow(edgeFrac(x, y), 4.0);
       const angle = Math.atan2(y - CY, x - CX);
-      function boost(peak) {
+      // Sector strength at each cardinal direction (slightly wider than 90°)
+      function s(peak) {
         const d = Math.abs(((angle - peak + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
-        return Math.cos(Math.min(d, Math.PI / 2)) ** 2 * ef * 0.42;
+        return Math.cos(Math.min(d / 1.15, Math.PI / 2)) ** 2 * ef;
       }
+      const s0 = s(0), s1 = s(Math.PI / 2), s2 = s(Math.PI), s3 = s(-Math.PI / 2);
+      const peak = Math.max(s0, s1, s2, s3);  // dominant sector at this angle
+      const base = peak * 0.85;               // 85% shared → minimal in-cell jump
       return [
-        clamp(base + boost(0)),
-        clamp(base + boost(Math.PI / 2)),
-        clamp(base + boost(Math.PI)),
-        clamp(base + boost(-Math.PI / 2)),
+        clamp(base + s0 * 0.15),  // sheet1: slight right-sector emphasis
+        clamp(base + s1 * 0.15),  // sheet2: slight top-sector emphasis
+        clamp(base + s2 * 0.15),  // sheet3: slight left-sector emphasis
+        clamp(base + s3 * 0.15),  // sheet4: slight bottom-sector emphasis
       ];
     }
 
@@ -413,8 +419,8 @@
       { name: '트윈 핫스팟 (σ=6, wide white bg)',      fn: patternClassic    },
       { name: '대각선 스크래치 (σ=1.8, thin lines)',   fn: patternScratch    },
       { name: '동심원 불스아이 (Gaussian rings σ=2)',   fn: patternBullseye   },
-      { name: '상단 그래디언트 (steep top-edge ramp)', fn: patternGradient   },
-      { name: '방위각 섹터 결함 (ef², rim-only)',       fn: patternSector     },
+      { name: '상단 그래디언트 (power 2.5, top 30%)',   fn: patternGradient   },
+      { name: '방위각 섹터 결함 (ef⁴, cardinal arcs)', fn: patternSector     },
       { name: '산발성 마이크로 클러스터 (σ=4)',         fn: patternClusters   },
       { name: '중심·엣지 분리 결함 (disk + thin ring)', fn: patternEdgeCenter },
     ];
