@@ -159,8 +159,11 @@
         const cx = PAD_L + (item.x - 1) * CELL;
         const cy = PAD_T + (GRID - item.y) * CELL;
 
-        // ① Fill four sub-quadrants with NO gap between them
-        // getColor returns null only when val===0 (no data); skip those fills.
+        // ① Fill whole cell white first so any zero-value sub-quad shows white
+        //    (not the dark canvas background). Non-zero quads then overlay on top.
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(cx, cy, CELL, CELL);
+
         const c1 = getColor(item.sheet1, maxVal);
         const c2 = getColor(item.sheet2, maxVal);
         const c3 = getColor(item.sheet3, maxVal);
