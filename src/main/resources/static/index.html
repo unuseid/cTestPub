@@ -35,7 +35,7 @@
     }
     .legend-bar {
       width: 180px; height: 14px;
-      background: linear-gradient(to right, #e8f4fd, #4a90d9, #ffffff, #e05a6f, #a00020);
+      background: linear-gradient(to right, #ffffff, #3258c8, #ffc814, #b4001a);
       border: 1px solid #333; border-radius: 2px;
     }
     #outer { overflow: auto; max-width: 100%; }
@@ -108,25 +108,32 @@
     let maxVal  = 1;
     let autoId  = null;
 
-    // ── color scale (blue → white → red, gamma-corrected) ───────────────────────
-    // gamma < 1 expands the lower half of the range so mid-range values clearly
-    // show as blue rather than washing out to near-white.
+    // ── color scale: white → blue → yellow → red (4-stop, gamma-corrected) ────────
+    //
+    //  stop 0  t=0.00  white   (255,255,255)  — no / very few failures
+    //  stop 1  t=0.33  blue    ( 50, 90, 200)  — low failures
+    //  stop 2  t=0.67  yellow  (255, 200,  20)  — elevated failures
+    //  stop 3  t=1.00  red     (180,   0,  25)  — critical failures
+    //
+    // gamma 0.65 expands the lower range so mid-level values clearly show
+    // as blue rather than near-white.
+    // val === 0 (no data posted for this cell) stays as canvas background.
+    const COLOR_STOPS = [
+      [255, 255, 255],   // white
+      [ 50,  90, 200],   // blue
+      [255, 200,  20],   // yellow
+      [180,   0,  25],   // red
+    ];
+
     function getColor(val, max) {
-      if (max === 0 || val === 0) return '#e8f4fd';
-      const t = Math.pow(Math.min(val / max, 1), 0.65);  // perceptual gamma
-      let r, g, b;
-      if (t < 0.5) {
-        const s = t * 2;
-        r = Math.round(0x4a + s * (255 - 0x4a));
-        g = Math.round(0x90 + s * (255 - 0x90));
-        b = Math.round(0xd9 + s * (255 - 0xd9));
-      } else {
-        const s = (t - 0.5) * 2;
-        r = Math.round(255 + s * (0xa0 - 255));
-        g = Math.round(255 + s * (0x00 - 255));
-        b = Math.round(255 + s * (0x20 - 255));
-      }
-      return `rgb(${r},${g},${b})`;
+      if (max === 0 || val === 0) return null;   // null → skip draw (background shows)
+      const t   = Math.pow(Math.min(val / max, 1), 0.65);
+      const pos = t * (COLOR_STOPS.length - 1);  // 0 … 3
+      const lo  = Math.min(Math.floor(pos), COLOR_STOPS.length - 2);
+      const f   = pos - lo;
+      const [r1,g1,b1] = COLOR_STOPS[lo];
+      const [r2,g2,b2] = COLOR_STOPS[lo + 1];
+      return `rgb(${Math.round(r1+f*(r2-r1))},${Math.round(g1+f*(g2-g1))},${Math.round(b1+f*(b2-b1))})`;
     }
 
     // ── rendering ───────────────────────────────────────────────────────────────
@@ -150,17 +157,15 @@
         const cy = PAD_T + (GRID - item.y) * CELL;
 
         // ① Fill four sub-quadrants with NO gap between them
-        ctx.fillStyle = getColor(item.sheet1, maxVal);
-        ctx.fillRect(cx,        cy,        QUAD, QUAD);
-
-        ctx.fillStyle = getColor(item.sheet2, maxVal);
-        ctx.fillRect(cx + QUAD, cy,        QUAD, QUAD);
-
-        ctx.fillStyle = getColor(item.sheet3, maxVal);
-        ctx.fillRect(cx,        cy + QUAD, QUAD, QUAD);
-
-        ctx.fillStyle = getColor(item.sheet4, maxVal);
-        ctx.fillRect(cx + QUAD, cy + QUAD, QUAD, QUAD);
+        // getColor returns null only when val===0 (no data); skip those fills.
+        const c1 = getColor(item.sheet1, maxVal);
+        const c2 = getColor(item.sheet2, maxVal);
+        const c3 = getColor(item.sheet3, maxVal);
+        const c4 = getColor(item.sheet4, maxVal);
+        if (c1) { ctx.fillStyle = c1; ctx.fillRect(cx,        cy,        QUAD, QUAD); }
+        if (c2) { ctx.fillStyle = c2; ctx.fillRect(cx + QUAD, cy,        QUAD, QUAD); }
+        if (c3) { ctx.fillStyle = c3; ctx.fillRect(cx,        cy + QUAD, QUAD, QUAD); }
+        if (c4) { ctx.fillStyle = c4; ctx.fillRect(cx + QUAD, cy + QUAD, QUAD, QUAD); }
 
         // ② Black border around the whole cell only (no internal dividers)
         ctx.strokeStyle = '#000';
