@@ -257,10 +257,17 @@
 
     // ═══════════════════════════════════════════════════════════════════════════
     // DEMO DATA — wafer-map failure patterns
-    // Each pattern fn returns [s1, s2, s3, s4] in [0, 1] for a given (x, y).
+    //
+    // Design rule: every pattern fn(x,y) → [s1,s2,s3,s4]  (each 0..1)
+    //
+    //   base(x,y)  drives 70–80 % of the signal → spatial coherence
+    //   δ1…δ4     per-sheet modulation ≤ ±0.25  → subtle sub-quad variation
+    //
+    // At any "hot" cell all four sheets land in a similar colour range;
+    // the tiny deltas show which quadrant of the die is under more stress.
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // helpers shared by all patterns
+    // ── shared math helpers ──────────────────────────────────────────────────────
     function gauss(x, y, px, py, sigma) {
       return Math.exp(-((x - px) ** 2 + (y - py) ** 2) / (2 * sigma * sigma));
     }
@@ -273,119 +280,145 @@
     }
     function clamp(v) { return Math.min(Math.max(v, 0), 1); }
 
-    // ── pattern 0: classic hot-spots + donut ────────────────────────────────────
-    // sheet1: TL cluster + faint ring   sheet2: TR cluster + edge roll-off
-    // sheet3: donut (low center)        sheet4: two merged clusters at bottom
+    // Spread [s] into four slightly different values using four small deltas.
+    // delta array [d1,d2,d3,d4] each in (-1,1); maxShift caps absolute change.
+    function spread(base, deltas, maxShift) {
+      return deltas.map(d => clamp(base + d * maxShift));
+    }
+
+    // ── Pattern 0: twin hot-spots (TL + TR quadrant of wafer) ───────────────────
+    // base  = blend of two large Gaussian peaks + gentle ring halo
+    // delta = each sheet slightly favours one peak or the ring
     function patternClassic(x, y) {
-      const s1 = clamp(gauss(x, y, 13, 38, 7) * 0.80 + ringVal(x, y, 18, 2.5) * 0.20);
-      const s2 = clamp(gauss(x, y, 38, 38, 7) * 0.65 + Math.pow(edgeFrac(x, y), 2.5) * 0.35);
-      const rr    = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
-      const ramp  = Math.min(rr / 14, 1);
-      const fall  = Math.exp(-(Math.max(rr - 14, 0) ** 2) / (2 * 6 * 6));
-      const s3 = clamp(ramp * fall);
-      const s4 = clamp(gauss(x, y, 18, 12, 6) * 0.55 + gauss(x, y, 36, 14, 7) * 0.55);
-      return [s1, s2, s3, s4];
+      const tl   = gauss(x, y, 13, 38, 10);
+      const tr   = gauss(x, y, 38, 38, 10);
+      const halo = ringVal(x, y, 18, 3.5) * 0.5;
+      const base = clamp(tl * 0.65 + tr * 0.60 + halo);
+      // δ: +TL peak / +TR peak / +ring / +both peaks sharp
+      return spread(base,
+        [ gauss(x,y,12,39,5) - 0.5*gauss(x,y,38,38,5),
+          gauss(x,y,39,39,5) - 0.5*gauss(x,y,13,38,5),
+          ringVal(x,y,17,2) - gauss(x,y,26,26,5)*0.4,
+          gauss(x,y,13,38,4)*0.6 + gauss(x,y,38,38,4)*0.6 - 0.5 ],
+        0.22);
     }
 
-    // ── pattern 1: crossed diagonal scratches ───────────────────────────────────
-    // Two fine lines cross the wafer: \ and /  Each sheet has a different blend.
+    // ── Pattern 1: crossed diagonal scratches (\  and /) ────────────────────────
+    // base  = max of both diagonals (wherever either line is, cell is hot)
+    // delta = each sheet tilts toward one scratch vs the other
     function patternScratch(x, y) {
-      const sigma = 2.2;
-      const d1 = Math.exp(-((y - x) ** 2)           / (2 * sigma * sigma)); // y = x  (\)
-      const d2 = Math.exp(-((y - (51 - x)) ** 2)    / (2 * sigma * sigma)); // y = 51-x (/)
-      // base low-level noise that rises slightly at edge
-      const base = 0.06 + edgeFrac(x, y) * 0.06;
-      const s1 = clamp(base + d1 * 0.90);
-      const s2 = clamp(base + d2 * 0.90);
-      const s3 = clamp(base + d1 * 0.55 + d2 * 0.35);
-      const s4 = clamp(base + d2 * 0.55 + d1 * 0.35);
-      return [s1, s2, s3, s4];
+      const sig = 2.0;
+      const d1  = Math.exp(-((y - x)        ** 2) / (2 * sig * sig));  // '\'
+      const d2  = Math.exp(-((y - (51 - x)) ** 2) / (2 * sig * sig));  // '/'
+      const base = clamp(Math.max(d1, d2) * 0.88 + edgeFrac(x, y) * 0.06);
+      return spread(base,
+        [ d1 - d2,            //  '\' bias
+          d2 - d1,            //  '/' bias
+          (d1 + d2) * 0.5 - 0.5,  // both present → push up at intersection
+          Math.abs(d1 - d2) * (-1) ],  // pull down at intersection (purely on one line)
+        0.22);
     }
 
-    // ── pattern 2: concentric rings / bulls-eye ─────────────────────────────────
-    // Oscillating failure bands radiating from center; each sheet is offset.
+    // ── Pattern 2: concentric rings / bulls-eye ──────────────────────────────────
+    // base  = same cosine ring wave for every sheet (same phase → same ring bands)
+    // delta = each sheet uses a very slightly different ring period
     function patternBullseye(x, y) {
-      const rr    = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
-      const period = 7.5;  // ring spacing
-      function wave(offset) {
-        return (Math.cos((rr + offset) * Math.PI / period) + 1) / 2;
-      }
-      // Amplitude tapers to 0 at center (wafer has less variation near center)
-      const env = clamp(rr / 6);
-      const s1 = clamp(wave(0)   * env);
-      const s2 = clamp(wave(period * 0.5) * env);  // half-period offset → inverted rings
-      const s3 = clamp(wave(period * 0.25) * env);
-      const s4 = clamp(wave(period * 0.75) * env);
-      return [s1, s2, s3, s4];
+      const rr  = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
+      const env = clamp(rr / 5);        // fades to zero at centre
+      const T   = 7.5;
+      const wave = p => ((Math.cos(rr * Math.PI / p) + 1) / 2) * env;
+      const base = wave(T);
+      return spread(base,
+        [ wave(T * 0.88) - base,   // tighter rings
+          wave(T * 1.12) - base,   // wider rings
+          wave(T * 0.94) - base,
+          wave(T * 1.06) - base ],
+        0.90);   // multiplier stays in effect because deltas are already small
     }
 
-    // ── pattern 3: linear process gradients ─────────────────────────────────────
-    // Each sheet has a smooth directional gradient (simulates systematic process drift).
+    // ── Pattern 3: directional process gradient ──────────────────────────────────
+    // base  = single strong S→N gradient across the wafer
+    // delta = each sheet tilts the gradient a few degrees in a different direction
     function patternGradient(x, y) {
-      const nx = (x - 1) / 49;   // 0 (left) → 1 (right)
-      const ny = (y - 1) / 49;   // 0 (bottom) → 1 (top)
-      // slight edge darkening so the pattern fades at the wafer rim
-      const vignette = clamp(1 - edgeFrac(x, y) * 0.25);
-      const s1 = clamp(nx * vignette);                        // L → R
-      const s2 = clamp((1 - ny) * vignette);                  // top → bottom (top = high)
-      const s3 = clamp((nx + (1 - ny)) / 2 * vignette);      // NW diagonal high
-      const s4 = clamp(((1 - nx) + ny) / 2 * vignette);      // SE diagonal high
-      return [s1, s2, s3, s4];
+      const nx  = (x - CX) / R;                // −1 (left)  … +1 (right)
+      const ny  = (y - CY) / R;                // −1 (bottom) … +1 (top)
+      const vig = clamp(1 - edgeFrac(x, y) * 0.25);
+      const base = clamp(((ny + 1) / 2) * vig);  // 0 at bottom, 1 at top
+      const t   = 0.20;                           // max tilt per sheet
+      return [
+        clamp(base + nx *  t * vig),   // leans right (NE corner hottest)
+        clamp(base + nx * -t * vig),   // leans left  (NW corner hottest)
+        clamp(base + nx *  t * 0.5 * vig + ny *  t * 0.3 * vig),
+        clamp(base + nx * -t * 0.5 * vig + ny *  t * 0.3 * vig),
+      ];
     }
 
-    // ── pattern 4: angular sector defects ───────────────────────────────────────
-    // Smooth pie-slice lobes; each sheet peaks in a different compass direction.
-    // Amplitude rises from 0 at center to max at rim (edge defect signature).
+    // ── Pattern 4: edge sector defect ───────────────────────────────────────────
+    // base  = moderate edge elevation (all sheets warm at rim)
+    // delta = each sheet gets an additional boost in one compass-direction sector
+    //         → within each rim cell all quads are warm; the "winning" sheet varies
     function patternSector(x, y) {
-      const angle = Math.atan2(y - CY, x - CX);   // −π … +π  (Cartesian, CCW)
-      const ef    = Math.pow(edgeFrac(x, y), 1.2); // rises toward edge
-      function lobe(peakAngle) {
-        const diff = Math.abs(((angle - peakAngle + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
-        return Math.cos(Math.min(diff, Math.PI / 2)) ** 2;   // 90° soft sector
+      const ef    = Math.pow(edgeFrac(x, y), 1.4);
+      const base  = ef * 0.58;          // all sheets elevated at rim
+      const angle = Math.atan2(y - CY, x - CX);
+      function sectorBoost(peakAngle) {
+        const d = Math.abs(((angle - peakAngle + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
+        return Math.cos(Math.min(d, Math.PI / 2)) ** 2 * ef * 0.42;
       }
-      const s1 = clamp(lobe(0)           * ef);   // right  (E)
-      const s2 = clamp(lobe(Math.PI / 2) * ef);   // top    (N)
-      const s3 = clamp(lobe(Math.PI)     * ef);   // left   (W)
-      const s4 = clamp(lobe(-Math.PI/2)  * ef);   // bottom (S)
-      return [s1, s2, s3, s4];
+      return [
+        clamp(base + sectorBoost(0)),            // E  sector → sheet1 leads
+        clamp(base + sectorBoost(Math.PI / 2)),  // N  sector → sheet2 leads
+        clamp(base + sectorBoost(Math.PI)),      // W  sector → sheet3 leads
+        clamp(base + sectorBoost(-Math.PI / 2)), // S  sector → sheet4 leads
+      ];
     }
 
-    // ── pattern 5: scattered micro-clusters ─────────────────────────────────────
-    // Many small Gaussian blobs; distinct seed per sheet gives independent maps.
+    // ── Pattern 5: scattered micro-clusters ──────────────────────────────────────
+    // base  = sum of ALL cluster Gaussians (every sheet sees every cluster)
+    // delta = each sheet subtly emphasises a different pair of clusters
     function patternClusters(x, y) {
-      const c1 = [[10,40],[28,44],[18,30],[35,38],[6,22]];
-      const c2 = [[42,42],[32,28],[20,18],[45,15],[38,30]];
-      const c3 = [[8,14],[22,8],[40,10],[30,20],[14,26]];
-      const c4 = [[36,36],[12,42],[44,28],[20,44],[30,10]];
-      function sumGauss(x, y, centers) {
-        return clamp(centers.reduce((acc, [px, py]) => acc + gauss(x, y, px, py, 4.5), 0));
-      }
-      return [sumGauss(x,y,c1), sumGauss(x,y,c2), sumGauss(x,y,c3), sumGauss(x,y,c4)];
+      const ALL = [[10,40],[28,44],[42,38],[35,14],[6,22],[44,20],[18,10],[22,28]];
+      const base = clamp(ALL.reduce((s, [px, py]) =>
+        s + gauss(x, y, px, py, 5.0) * 0.42, 0));
+      // small per-sheet accent (single tighter Gaussian at two clusters each)
+      const accent = (p1, p2) =>
+        gauss(x, y, p1[0], p1[1], 3.2) * 0.15 +
+        gauss(x, y, p2[0], p2[1], 3.2) * 0.12;
+      return [
+        clamp(base + accent(ALL[0], ALL[4])),
+        clamp(base + accent(ALL[1], ALL[3])),
+        clamp(base + accent(ALL[2], ALL[5])),
+        clamp(base + accent(ALL[6], ALL[7])),
+      ];
     }
 
-    // ── pattern 6: edge & center split ──────────────────────────────────────────
-    // Two failure populations: a hot inner disk and a hot outer ring, separated
-    // by a clear band. Each sheet has a different inner/outer ratio.
+    // ── Pattern 6: centre disk + edge ring ───────────────────────────────────────
+    // base  = equal blend of inner Gaussian blob and outer rim ring
+    //         → both regions are consistently warm in every sheet
+    // delta = each sheet has slightly different inner:outer mixing ratio
     function patternEdgeCenter(x, y) {
-      const rr     = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
-      const inner  = Math.exp(-(rr ** 2) / (2 * 6 * 6));           // center blob
-      const outer  = ringVal(x, y, R * 0.85, 2.5);                 // rim ring
-      const s1 = clamp(inner * 0.9 + outer * 0.1);
-      const s2 = clamp(inner * 0.4 + outer * 0.6);
-      const s3 = clamp(inner * 0.1 + outer * 0.9);
-      const s4 = clamp(inner * 0.6 + outer * 0.4);
-      return [s1, s2, s3, s4];
+      const rr    = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
+      const inner = Math.exp(-(rr ** 2) / (2 * 7 * 7));
+      const outer = ringVal(x, y, R * 0.84, 2.5);
+      const base  = clamp(inner * 0.50 + outer * 0.50);   // equal base
+      const mix   = 0.22;   // max shift
+      return [
+        clamp(base + (inner - outer) *  mix),   // inner-heavy
+        clamp(base + (inner - outer) * -mix),   // outer-heavy
+        clamp(base + (inner - outer) *  mix * 0.4),
+        clamp(base + (inner - outer) * -mix * 0.4),
+      ];
     }
 
-    // ── pattern registry ────────────────────────────────────────────────────────
+    // ── pattern registry ─────────────────────────────────────────────────────────
     const PATTERNS = [
-      { name: '웨이퍼 결함 클래식 (hot-spot + donut)', fn: patternClassic    },
-      { name: '대각선 스크래치 (crossed scratches)',   fn: patternScratch    },
-      { name: '동심원 불스아이 (concentric rings)',    fn: patternBullseye   },
-      { name: '공정 그래디언트 (directional drift)',   fn: patternGradient   },
-      { name: '방위각 섹터 결함 (compass lobes)',      fn: patternSector     },
-      { name: '산발성 마이크로 클러스터',               fn: patternClusters   },
-      { name: '중심·엣지 분리 결함',                   fn: patternEdgeCenter },
+      { name: '트윈 핫스팟 (TL+TR clusters + halo)', fn: patternClassic    },
+      { name: '대각선 스크래치 (crossed \\ / lines)', fn: patternScratch    },
+      { name: '동심원 불스아이 (concentric rings)',   fn: patternBullseye   },
+      { name: '공정 그래디언트 (S→N drift)',          fn: patternGradient   },
+      { name: '방위각 섹터 결함 (N/S/E/W edge lobe)', fn: patternSector     },
+      { name: '산발성 마이크로 클러스터',              fn: patternClusters   },
+      { name: '중심·엣지 분리 결함 (disk + rim ring)',fn: patternEdgeCenter },
     ];
 
     // ── generate & post demo data ────────────────────────────────────────────────
