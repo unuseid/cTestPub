@@ -108,10 +108,12 @@
     let maxVal  = 1;
     let autoId  = null;
 
-    // ── color scale (blue → white → red) ───────────────────────────────────────
+    // ── color scale (blue → white → red, gamma-corrected) ───────────────────────
+    // gamma < 1 expands the lower half of the range so mid-range values clearly
+    // show as blue rather than washing out to near-white.
     function getColor(val, max) {
       if (max === 0 || val === 0) return '#e8f4fd';
-      const t = Math.min(val / max, 1);
+      const t = Math.pow(Math.min(val / max, 1), 0.65);  // perceptual gamma
       let r, g, b;
       if (t < 0.5) {
         const s = t * 2;
@@ -258,16 +260,17 @@
     // ═══════════════════════════════════════════════════════════════════════════
     // DEMO DATA — wafer-map failure patterns
     //
-    // Design rule: every pattern fn(x,y) → [s1,s2,s3,s4]  (each 0..1)
+    // Design rules (applied to every pattern):
+    //   1. base(x,y)   strong spatial signal, 70-80 % weight
+    //   2. δ1…δ4       per-sheet modulation, max ±DMAX
+    //   3. withFloor() guarantees every sheet ≥ FLOOR so no cell is blank-white
     //
-    //   base(x,y)  drives 70–80 % of the signal → spatial coherence
-    //   δ1…δ4     per-sheet modulation ≤ ±0.25  → subtle sub-quad variation
-    //
-    // At any "hot" cell all four sheets land in a similar colour range;
-    // the tiny deltas show which quadrant of the die is under more stress.
+    // FLOOR means "cold" cells still show as a soft mid-blue (not near-white).
+    // Combined with the gamma correction in getColor(), the full blue→red range
+    // is used even for patterns that only span part of [0,1].
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // ── shared math helpers ──────────────────────────────────────────────────────
+    // ── shared helpers ───────────────────────────────────────────────────────────
     function gauss(x, y, px, py, sigma) {
       return Math.exp(-((x - px) ** 2 + (y - py) ** 2) / (2 * sigma * sigma));
     }
@@ -280,134 +283,123 @@
     }
     function clamp(v) { return Math.min(Math.max(v, 0), 1); }
 
-    // Spread [s] into four slightly different values using four small deltas.
-    // delta array [d1,d2,d3,d4] each in (-1,1); maxShift caps absolute change.
-    function spread(base, deltas, maxShift) {
-      return deltas.map(d => clamp(base + d * maxShift));
-    }
+    const FLOOR = 0.15;   // no sheet ever goes below this → no blank cells
+    const DMAX  = 0.17;   // max per-sheet delta (keeps sub-quads coherent)
 
-    // ── Pattern 0: twin hot-spots (TL + TR quadrant of wafer) ───────────────────
-    // base  = blend of two large Gaussian peaks + gentle ring halo
-    // delta = each sheet slightly favours one peak or the ring
+    // Apply minimum floor to all four sheets.
+    function wf(arr) { return arr.map(v => Math.max(v, FLOOR)); }
+
+    // ── Pattern 0: twin hot-spots (TL + TR of wafer) ────────────────────────────
     function patternClassic(x, y) {
-      const tl   = gauss(x, y, 13, 38, 10);
-      const tr   = gauss(x, y, 38, 38, 10);
-      const halo = ringVal(x, y, 18, 3.5) * 0.5;
-      const base = clamp(tl * 0.65 + tr * 0.60 + halo);
-      // δ: +TL peak / +TR peak / +ring / +both peaks sharp
-      return spread(base,
-        [ gauss(x,y,12,39,5) - 0.5*gauss(x,y,38,38,5),
-          gauss(x,y,39,39,5) - 0.5*gauss(x,y,13,38,5),
-          ringVal(x,y,17,2) - gauss(x,y,26,26,5)*0.4,
-          gauss(x,y,13,38,4)*0.6 + gauss(x,y,38,38,4)*0.6 - 0.5 ],
-        0.22);
+      const g1   = gauss(x, y, 13, 38, 11);
+      const g2   = gauss(x, y, 38, 38, 11);
+      const halo = ringVal(x, y, 17, 4.0) * 0.45;
+      const base = clamp(FLOOR + g1 * 0.68 + g2 * 0.62 + halo);
+      return wf([
+        clamp(base + gauss(x,y,12,40,5)*0.17 - gauss(x,y,39,39,5)*0.07),
+        clamp(base - gauss(x,y,13,38,5)*0.07 + gauss(x,y,39,39,5)*0.17),
+        clamp(base + ringVal(x,y,16,2.5)*0.13 - gauss(x,y,26,26,6)*0.11),
+        clamp(base + gauss(x,y,12,40,4)*0.09 + gauss(x,y,39,39,4)*0.09),
+      ]);
     }
 
-    // ── Pattern 1: crossed diagonal scratches (\  and /) ────────────────────────
-    // base  = max of both diagonals (wherever either line is, cell is hot)
-    // delta = each sheet tilts toward one scratch vs the other
+    // ── Pattern 1: crossed diagonal scratches (\ and /) ─────────────────────────
     function patternScratch(x, y) {
-      const sig = 2.0;
+      const sig = 2.5;
       const d1  = Math.exp(-((y - x)        ** 2) / (2 * sig * sig));  // '\'
       const d2  = Math.exp(-((y - (51 - x)) ** 2) / (2 * sig * sig));  // '/'
-      const base = clamp(Math.max(d1, d2) * 0.88 + edgeFrac(x, y) * 0.06);
-      return spread(base,
-        [ d1 - d2,            //  '\' bias
-          d2 - d1,            //  '/' bias
-          (d1 + d2) * 0.5 - 0.5,  // both present → push up at intersection
-          Math.abs(d1 - d2) * (-1) ],  // pull down at intersection (purely on one line)
-        0.22);
+      // both scratches raise the base; edge adds faint background warmth
+      const base = clamp(FLOOR + Math.max(d1, d2) * 0.83 + edgeFrac(x,y) * 0.06);
+      return wf([
+        clamp(base + (d1 - d2) * DMAX),          // '\' emphasis
+        clamp(base + (d2 - d1) * DMAX),          // '/' emphasis
+        clamp(base + (d1 + d2 - 1)  * DMAX),     // intersection lift
+        clamp(base - Math.abs(d1-d2) * DMAX),    // node suppression
+      ]);
     }
 
     // ── Pattern 2: concentric rings / bulls-eye ──────────────────────────────────
-    // base  = same cosine ring wave for every sheet (same phase → same ring bands)
-    // delta = each sheet uses a very slightly different ring period
+    // All four sheets share the same ring phase; only the period varies slightly.
     function patternBullseye(x, y) {
       const rr  = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
-      const env = clamp(rr / 5);        // fades to zero at centre
+      const env = clamp(rr / 5);          // envelope: zero at centre
       const T   = 7.5;
       const wave = p => ((Math.cos(rr * Math.PI / p) + 1) / 2) * env;
       const base = wave(T);
-      return spread(base,
-        [ wave(T * 0.88) - base,   // tighter rings
-          wave(T * 1.12) - base,   // wider rings
-          wave(T * 0.94) - base,
-          wave(T * 1.06) - base ],
-        0.90);   // multiplier stays in effect because deltas are already small
+      return wf([
+        clamp(FLOOR + base * 0.83 + wave(T * 0.88) * 0.17),
+        clamp(FLOOR + base * 0.83 + wave(T * 1.12) * 0.17),
+        clamp(FLOOR + base * 0.83 + wave(T * 0.94) * 0.17),
+        clamp(FLOOR + base * 0.83 + wave(T * 1.06) * 0.17),
+      ]);
     }
 
     // ── Pattern 3: directional process gradient ──────────────────────────────────
-    // base  = single strong S→N gradient across the wafer
-    // delta = each sheet tilts the gradient a few degrees in a different direction
+    // Strong S→N gradient; each sheet tilts slightly in a different compass angle.
     function patternGradient(x, y) {
-      const nx  = (x - CX) / R;                // −1 (left)  … +1 (right)
-      const ny  = (y - CY) / R;                // −1 (bottom) … +1 (top)
-      const vig = clamp(1 - edgeFrac(x, y) * 0.25);
-      const base = clamp(((ny + 1) / 2) * vig);  // 0 at bottom, 1 at top
-      const t   = 0.20;                           // max tilt per sheet
-      return [
-        clamp(base + nx *  t * vig),   // leans right (NE corner hottest)
-        clamp(base + nx * -t * vig),   // leans left  (NW corner hottest)
-        clamp(base + nx *  t * 0.5 * vig + ny *  t * 0.3 * vig),
-        clamp(base + nx * -t * 0.5 * vig + ny *  t * 0.3 * vig),
-      ];
+      const nx  = (x - CX) / R;    // −1 … +1
+      const ny  = (y - CY) / R;    // −1 … +1
+      const vig = clamp(1 - edgeFrac(x,y) * 0.25);
+      const base = clamp(FLOOR + ((ny + 1) / 2) * 0.78 * vig);
+      const t    = DMAX;
+      return wf([
+        clamp(base + nx *  t * vig),
+        clamp(base - nx *  t * vig),
+        clamp(base + nx * t*0.55 * vig + ny * t*0.30 * vig),
+        clamp(base - nx * t*0.55 * vig + ny * t*0.30 * vig),
+      ]);
     }
 
     // ── Pattern 4: edge sector defect ───────────────────────────────────────────
-    // base  = moderate edge elevation (all sheets warm at rim)
-    // delta = each sheet gets an additional boost in one compass-direction sector
-    //         → within each rim cell all quads are warm; the "winning" sheet varies
+    // ef^0.8 (was 1.4) → gentler rise so centre is not completely dark.
+    // base = FLOOR + ef*0.55 ensures every cell, even the centre, shows colour.
+    // Each sheet gets a pure-sector boost that peaks in one compass direction.
     function patternSector(x, y) {
-      const ef    = Math.pow(edgeFrac(x, y), 1.4);
-      const base  = ef * 0.58;          // all sheets elevated at rim
+      const ef    = Math.pow(edgeFrac(x, y), 0.8);   // gentle radial rise
+      const base  = FLOOR + ef * 0.55;
       const angle = Math.atan2(y - CY, x - CX);
       function sectorBoost(peakAngle) {
         const d = Math.abs(((angle - peakAngle + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
         return Math.cos(Math.min(d, Math.PI / 2)) ** 2 * ef * 0.42;
       }
-      return [
-        clamp(base + sectorBoost(0)),            // E  sector → sheet1 leads
-        clamp(base + sectorBoost(Math.PI / 2)),  // N  sector → sheet2 leads
-        clamp(base + sectorBoost(Math.PI)),      // W  sector → sheet3 leads
-        clamp(base + sectorBoost(-Math.PI / 2)), // S  sector → sheet4 leads
-      ];
+      return wf([
+        clamp(base + sectorBoost(0)),
+        clamp(base + sectorBoost(Math.PI / 2)),
+        clamp(base + sectorBoost(Math.PI)),
+        clamp(base + sectorBoost(-Math.PI / 2)),
+      ]);
     }
 
     // ── Pattern 5: scattered micro-clusters ──────────────────────────────────────
-    // base  = sum of ALL cluster Gaussians (every sheet sees every cluster)
-    // delta = each sheet subtly emphasises a different pair of clusters
+    // All clusters contribute to the shared base; per-sheet accent on two each.
     function patternClusters(x, y) {
       const ALL = [[10,40],[28,44],[42,38],[35,14],[6,22],[44,20],[18,10],[22,28]];
-      const base = clamp(ALL.reduce((s, [px, py]) =>
-        s + gauss(x, y, px, py, 5.0) * 0.42, 0));
-      // small per-sheet accent (single tighter Gaussian at two clusters each)
-      const accent = (p1, p2) =>
-        gauss(x, y, p1[0], p1[1], 3.2) * 0.15 +
-        gauss(x, y, p2[0], p2[1], 3.2) * 0.12;
-      return [
+      const base = clamp(FLOOR + ALL.reduce((s, [px,py]) =>
+        s + gauss(x, y, px, py, 5.2) * 0.40, 0));
+      const accent = ([px1,py1], [px2,py2]) =>
+        gauss(x,y,px1,py1,3.0) * 0.14 + gauss(x,y,px2,py2,3.0) * 0.11;
+      return wf([
         clamp(base + accent(ALL[0], ALL[4])),
         clamp(base + accent(ALL[1], ALL[3])),
         clamp(base + accent(ALL[2], ALL[5])),
         clamp(base + accent(ALL[6], ALL[7])),
-      ];
+      ]);
     }
 
     // ── Pattern 6: centre disk + edge ring ───────────────────────────────────────
-    // base  = equal blend of inner Gaussian blob and outer rim ring
-    //         → both regions are consistently warm in every sheet
-    // delta = each sheet has slightly different inner:outer mixing ratio
+    // base = equal inner + outer blend; per-sheet shifts the inner:outer ratio.
     function patternEdgeCenter(x, y) {
       const rr    = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
       const inner = Math.exp(-(rr ** 2) / (2 * 7 * 7));
       const outer = ringVal(x, y, R * 0.84, 2.5);
-      const base  = clamp(inner * 0.50 + outer * 0.50);   // equal base
-      const mix   = 0.22;   // max shift
-      return [
-        clamp(base + (inner - outer) *  mix),   // inner-heavy
-        clamp(base + (inner - outer) * -mix),   // outer-heavy
-        clamp(base + (inner - outer) *  mix * 0.4),
-        clamp(base + (inner - outer) * -mix * 0.4),
-      ];
+      const base  = clamp(FLOOR + inner * 0.50 + outer * 0.50);
+      const diff  = (inner - outer) * DMAX;
+      return wf([
+        clamp(base + diff),
+        clamp(base - diff),
+        clamp(base + diff * 0.45),
+        clamp(base - diff * 0.45),
+      ]);
     }
 
     // ── pattern registry ─────────────────────────────────────────────────────────
