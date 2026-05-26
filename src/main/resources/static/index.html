@@ -92,7 +92,7 @@
     // ── layout constants ────────────────────────────────────────────────────────
     const CELL  = 16;          // px per die cell
     const QUAD  = CELL / 2;   // px per sub-quadrant
-    const GRID  = 50;          // 50 × 50 grid
+    const GRID  = 80;          // 80 × 80 grid
     const PAD_L = 44;
     const PAD_B = 30;
     const PAD_T = 8;
@@ -101,7 +101,7 @@
     const H = PAD_T + GRID * CELL + PAD_B;
 
     // ── wafer geometry ──────────────────────────────────────────────────────────
-    const CX = 25.5, CY = 25.5, R = 22;   // wafer center and radius
+    const CX = 40.5, CY = 40.5, R = 35;   // wafer center and radius (80×80)
 
     // ── runtime state ───────────────────────────────────────────────────────────
     let dataMap = {};
@@ -298,27 +298,27 @@
     // Narrow Gaussians (σ=5-6) give steep peaks with white surroundings.
     const DMAX = 0.13;
 
-    // ── Pattern 0: twin hot-spots (σ=6, wide white background) ──────────────────
-    // Cells > ~12 px from either peak fall below the blue threshold → white.
+    // ── Pattern 0: twin hot-spots (σ=10, wide white background) ─────────────────
+    // Coordinates scaled ×1.6 from the original 50×50 design.
     function patternClassic(x, y) {
-      const g1   = gauss(x, y, 13, 38, 6);
-      const g2   = gauss(x, y, 38, 38, 6);
-      const halo = ringVal(x, y, 17, 2.5) * 0.28;
+      const g1   = gauss(x, y, 21, 61, 10);
+      const g2   = gauss(x, y, 61, 61, 10);
+      const halo = ringVal(x, y, 27, 4) * 0.28;
       const base = clamp(g1 * 0.72 + g2 * 0.65 + halo);
       return [
-        clamp(base + gauss(x,y,12,39,4)*0.13 - gauss(x,y,39,39,4)*0.05),
-        clamp(base - gauss(x,y,13,38,4)*0.05 + gauss(x,y,39,39,4)*0.13),
-        clamp(base + ringVal(x,y,16,2)*0.10  - gauss(x,y,26,26,5)*0.08),
-        clamp(base + gauss(x,y,12,39,3)*0.07 + gauss(x,y,39,39,3)*0.07),
+        clamp(base + gauss(x,y,19,62,6)*0.13 - gauss(x,y,62,62,6)*0.05),
+        clamp(base - gauss(x,y,21,61,6)*0.05 + gauss(x,y,62,62,6)*0.13),
+        clamp(base + ringVal(x,y,26,3)*0.10  - gauss(x,y,42,42,8)*0.08),
+        clamp(base + gauss(x,y,19,62,5)*0.07 + gauss(x,y,62,62,5)*0.07),
       ];
     }
 
-    // ── Pattern 1: diagonal scratches (σ=1.8, thin sharp lines) ─────────────────
-    // Cells even 4 px off either line are white.
+    // ── Pattern 1: diagonal scratches (σ=3, thin sharp lines) ───────────────────
+    // Cells > ~5 px off either diagonal are white. (51 → 81 for 80×80 grid)
     function patternScratch(x, y) {
-      const sig = 1.8;
+      const sig = 3;
       const d1  = Math.exp(-((y - x)        ** 2) / (2 * sig * sig));
-      const d2  = Math.exp(-((y - (51 - x)) ** 2) / (2 * sig * sig));
+      const d2  = Math.exp(-((y - (81 - x)) ** 2) / (2 * sig * sig));
       const base = clamp(Math.max(d1, d2) * 0.88);
       return [
         clamp(base + (d1 - d2) * DMAX),
@@ -329,11 +329,11 @@
     }
 
     // ── Pattern 2: Gaussian bulls-eye (3 sharp rings, white gaps between) ────────
-    // Each ring is a narrow Gaussian (σ=2) at r=5, 12, 19.
+    // Rings at r=8,19,30 (σ=3) — scaled ×1.6 from 50×50 design (r=5,12,19 σ=2).
     function patternBullseye(x, y) {
-      const r1 = ringVal(x, y,  5, 2.0);
-      const r2 = ringVal(x, y, 12, 2.0);
-      const r3 = ringVal(x, y, 19, 2.0);
+      const r1 = ringVal(x, y,  8, 3);
+      const r2 = ringVal(x, y, 19, 3);
+      const r3 = ringVal(x, y, 30, 3);
       return [
         clamp(r1*0.90 + r2*0.75 + r3*0.80),
         clamp(r1*0.80 + r2*0.90 + r3*0.75),
@@ -382,14 +382,14 @@
       ];
     }
 
-    // ── Pattern 5: scattered micro-clusters (σ=4) ────────────────────────────────
-    // All sheets share the same cluster set; inter-cluster cells are white.
+    // ── Pattern 5: scattered micro-clusters (σ=6) ────────────────────────────────
+    // Coordinates scaled ×1.6 from 50×50 design; σ 4→6, accent σ 2.5→4.
     function patternClusters(x, y) {
-      const ALL = [[10,40],[28,44],[42,38],[35,14],[6,22],[44,20],[18,10],[22,28]];
+      const ALL = [[16,64],[45,70],[67,61],[56,22],[10,35],[70,32],[29,16],[35,45]];
       const base = clamp(ALL.reduce((s, [px,py]) =>
-        s + gauss(x, y, px, py, 4.0) * 0.55, 0));
+        s + gauss(x, y, px, py, 6) * 0.55, 0));
       const accent = ([px1,py1], [px2,py2]) =>
-        gauss(x,y,px1,py1,2.5)*0.13 + gauss(x,y,px2,py2,2.5)*0.10;
+        gauss(x,y,px1,py1,4)*0.13 + gauss(x,y,px2,py2,4)*0.10;
       return [
         clamp(base + accent(ALL[0], ALL[4])),
         clamp(base + accent(ALL[1], ALL[3])),
@@ -400,10 +400,11 @@
 
     // ── Pattern 6: centre disk + thin edge ring ───────────────────────────────────
     // Two isolated hot zones; the band between them is white.
+    // σ scaled ×1.6 from 50×50 design: centre σ 5→8, ring σ 1.8→3.
     function patternEdgeCenter(x, y) {
       const rr    = Math.sqrt((x - CX) ** 2 + (y - CY) ** 2);
-      const inner = Math.exp(-(rr ** 2) / (2 * 5 * 5));
-      const outer = ringVal(x, y, R * 0.84, 1.8);
+      const inner = Math.exp(-(rr ** 2) / (2 * 8 * 8));
+      const outer = ringVal(x, y, R * 0.84, 3);
       const base  = clamp(inner * 0.58 + outer * 0.58);
       const diff  = (inner - outer) * DMAX;
       return [
@@ -416,9 +417,9 @@
 
     // ── pattern registry ─────────────────────────────────────────────────────────
     const PATTERNS = [
-      { name: '트윈 핫스팟 (σ=6, wide white bg)',      fn: patternClassic    },
-      { name: '대각선 스크래치 (σ=1.8, thin lines)',   fn: patternScratch    },
-      { name: '동심원 불스아이 (Gaussian rings σ=2)',   fn: patternBullseye   },
+      { name: '트윈 핫스팟 (σ=10, wide white bg)',      fn: patternClassic    },
+      { name: '대각선 스크래치 (σ=3, thin lines)',     fn: patternScratch    },
+      { name: '동심원 불스아이 (Gaussian rings σ=3)',   fn: patternBullseye   },
       { name: '상단 그래디언트 (power 2.5, top 30%)',   fn: patternGradient   },
       { name: '방위각 섹터 결함 (ef⁴, cardinal arcs)', fn: patternSector     },
       { name: '산발성 마이크로 클러스터 (σ=4)',         fn: patternClusters   },
