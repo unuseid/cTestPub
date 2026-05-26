@@ -7,7 +7,7 @@
     * { box-sizing: border-box; }
     body {
       margin: 0; padding: 20px;
-      background: #12131a;
+      background: #666666;
       color: #dde;
       font-family: 'Courier New', monospace;
     }
@@ -149,8 +149,8 @@
       canvas.height = H;
       const ctx = canvas.getContext('2d');
 
-      // dark background
-      ctx.fillStyle = '#1a1b26';
+      // gray background
+      ctx.fillStyle = '#666666';
       ctx.fillRect(0, 0, W, H);
 
       // draw each die cell
@@ -158,9 +158,9 @@
         const item = dataMap[key];
         if (item.x < 1 || item.x > GRID || item.y < 1 || item.y > GRID) continue;
 
-        // Cartesian → canvas (y flipped)
+        // screen coords: x left→right, y top(1)→bottom(80)
         const cx = PAD_L + (item.x - 1) * CELL;
-        const cy = PAD_T + (GRID - item.y) * CELL;
+        const cy = PAD_T + (item.y - 1) * CELL;
 
         // ① Fill whole cell white first so any zero-value sub-quad shows white
         //    (not the dark canvas background). Non-zero quads then overlay on top.
@@ -191,11 +191,11 @@
         ctx.fillText(x, PAD_L + (x - 1) * CELL + CELL / 2, PAD_T + GRID * CELL + 4);
       }
 
-      // axis tick labels — Y (left, bottom-to-top in Cartesian)
+      // axis tick labels — Y (left, top-to-bottom: y=1 at top, y=80 at bottom)
       ctx.textAlign    = 'right';
       ctx.textBaseline = 'middle';
       for (let y = 1; y <= GRID; y += 5) {
-        ctx.fillText(y, PAD_L - 4, PAD_T + (GRID - y) * CELL + CELL / 2);
+        ctx.fillText(y, PAD_L - 4, PAD_T + (y - 1) * CELL + CELL / 2);
       }
 
       // axis name labels
@@ -274,7 +274,7 @@
       const mx   = (e.clientX - rect.left) * (canvas.width  / rect.width);
       const my   = (e.clientY - rect.top)  * (canvas.height / rect.height);
       const gx   = Math.floor((mx - PAD_L) / CELL) + 1;
-      const gy   = GRID - Math.floor((my - PAD_T) / CELL);
+      const gy   = Math.floor((my - PAD_T) / CELL) + 1;
       if (gx < 1 || gx > GRID || gy < 1 || gy > GRID) {
         tooltip.style.display = 'none'; return;
       }
@@ -374,7 +374,7 @@
     // giving fewer visible bands than a gentler exponent.
     function patternGradient(x, y) {
       const nx  = (x - CX) / R;
-      const ny  = (y - CY) / R;
+      const ny  = (CY - y) / R;   // flipped: positive at top (small y = screen top)
       const vig = clamp(1 - edgeFrac(x,y) * 0.20);
       const ramp = clamp(Math.pow(Math.max(ny, 0), 2.5) * vig * 0.95);
       return [
