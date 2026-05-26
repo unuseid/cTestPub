@@ -78,7 +78,7 @@
     <span>낮음</span>
     <div class="legend-bar"></div>
     <span>높음</span>
-    <span style="margin-left:16px; color:#444">데이터 없음: 빈 배경</span>
+    <span style="margin-left:16px; color:#888; font-size:10px;">γ=0.4 스케일 &nbsp;|&nbsp; 데이터 없음: 회색 배경</span>
   </div>
   <div style="font-size:11px; color:#555; margin-bottom:12px;">
     셀 내 배치 — TL:sheet1 &nbsp;TR:sheet2 &nbsp;BL:sheet3 &nbsp;BR:sheet4
@@ -133,7 +133,10 @@
 
     function getColor(val, max) {
       if (max === 0 || val === 0) return null;
-      const t  = Math.min(val / max, 1);
+      // γ=0.4 power compression: expands the low end so small-but-real values
+      // are visible even when a single outlier dominates the max.
+      // Example: 300 K out of 52 M (0.57 % linear) → t ≈ 0.13 (visible pale blue).
+      const t  = Math.pow(Math.min(val / max, 1), 0.4);
       let lo = COLOR_STOPS[0], hi = COLOR_STOPS[COLOR_STOPS.length - 1];
       for (let i = 0; i < COLOR_STOPS.length - 1; i++) {
         if (t <= COLOR_STOPS[i + 1].t) { lo = COLOR_STOPS[i]; hi = COLOR_STOPS[i + 1]; break; }
