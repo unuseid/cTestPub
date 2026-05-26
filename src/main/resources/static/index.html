@@ -31,41 +31,6 @@
       font-size: 12px; color: #4db6ac; font-style: italic;
     }
     #status { font-size: 12px; color: #888; }
-
-    /* ── JSON input modal ───────────────────────────────────────────────── */
-    #inputModal {
-      display: none;
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.75);
-      z-index: 200;
-      align-items: center; justify-content: center;
-    }
-    #inputModal.open { display: flex; }
-    #inputBox {
-      background: #1e1f2e;
-      border: 1px solid #555;
-      border-radius: 6px;
-      padding: 20px;
-      width: 620px; max-width: 95vw;
-      display: flex; flex-direction: column; gap: 10px;
-    }
-    #inputBox h2 { margin: 0; font-size: 14px; color: #e05a6f; }
-    #inputBox .hint {
-      font-size: 11px; color: #666;
-      background: #0d0e18; padding: 8px 10px;
-      border-radius: 4px; font-family: 'Courier New', monospace;
-      white-space: pre; overflow-x: auto;
-    }
-    #jsonInput {
-      min-height: 220px; max-height: 50vh;
-      background: #0d0e18; color: #cce;
-      border: 1px solid #333; border-radius: 4px;
-      padding: 10px; font-family: 'Courier New', monospace;
-      font-size: 12px; resize: vertical;
-    }
-    #jsonInput:focus { outline: 1px solid #5c6bc0; }
-    #inputError { font-size: 11px; color: #e05a6f; min-height: 14px; }
-    .modal-btns { display: flex; gap: 8px; justify-content: flex-end; }
     .legend-row {
       display: flex; align-items: center; gap: 8px;
       margin-bottom: 12px; font-size: 11px; color: #999;
@@ -99,30 +64,14 @@
 
   <div id="controls">
     <button onclick="loadData()">새로고침</button>
-    <button class="teal"   id="demoBtn"  onclick="generateDemo()">더미 데이터 생성</button>
-    <button class="indigo" id="inputBtn" onclick="openDataInput()">JSON 데이터 입력</button>
+    <button class="teal"   id="demoBtn" onclick="generateDemo()">더미 데이터 생성</button>
+    <button class="indigo" id="dbBtn"   onclick="loadFromDb()">DB 데이터 로드</button>
     <span id="patternName"></span>
     <label style="font-size:12px; color:#888; margin-left:4px;">
       <input type="checkbox" id="autoRefresh" onchange="toggleAuto()" checked>
       자동 새로고침 (5s)
     </label>
     <span id="status">로딩 중...</span>
-  </div>
-
-  <!-- ── JSON data-input modal ─────────────────────────────────────────── -->
-  <div id="inputModal" onclick="closeDataInput(event)">
-    <div id="inputBox" onclick="event.stopPropagation()">
-      <h2>JSON 데이터 입력 → POST /api/data</h2>
-      <div class="hint">형식: [{"x":1,"y":1,"sheet1":100,"sheet2":200,"sheet3":150,"sheet4":50}, ...]
-필드 설명: x·y (1–80 정수), sheet1–4 (실패 횟수, long)</div>
-      <textarea id="jsonInput" spellcheck="false"
-        placeholder='[{"x":1,"y":1,"sheet1":100,"sheet2":200,"sheet3":150,"sheet4":50}]'></textarea>
-      <div id="inputError"></div>
-      <div class="modal-btns">
-        <button style="background:#444" onclick="closeDataInput()">취소</button>
-        <button id="applyBtn" onclick="submitDataInput()">적용</button>
-      </div>
-    </div>
   </div>
 
   <div class="legend-row">
@@ -283,61 +232,26 @@
       }
     }
 
-    // ── JSON data-input modal ────────────────────────────────────────────────────
+    // ── DB load via JDBC endpoint ────────────────────────────────────────────────
     //
-    // Opens a modal where the user can paste a JSON array of FailXY objects and
-    // POST it directly to POST /api/data (same endpoint used by the dummy generator).
+    // Calls GET /api/data/db on the server.  The server-side method runs a JDBC
+    // query (implemented by the user in VisualizationController.loadFromDb) and
+    // also writes the result into the in-memory store, so the subsequent
+    // loadData() reads the same data through GET /api/data and renders it.
     //
-    function openDataInput() {
-      document.getElementById('inputError').textContent = '';
-      document.getElementById('inputModal').classList.add('open');
-      document.getElementById('jsonInput').focus();
-    }
-
-    function closeDataInput(e) {
-      // Called both from the backdrop click and the Cancel button.
-      // When called from backdrop click, e is the MouseEvent; we only close if
-      // the click target is the backdrop itself (handled by stopPropagation on #inputBox).
-      document.getElementById('inputModal').classList.remove('open');
-    }
-
-    async function submitDataInput() {
-      const raw = document.getElementById('jsonInput').value.trim();
-      const errEl  = document.getElementById('inputError');
-      const applyBtn = document.getElementById('applyBtn');
-      errEl.textContent = '';
-
-      // ① Parse JSON
-      let items;
+    async function loadFromDb() {
+      const btn = document.getElementById('dbBtn');
+      btn.disabled = true;
+      document.getElementById('patternName').textContent = '';
+      document.getElementById('status').textContent = 'DB에서 로드 중…';
       try {
-        items = JSON.parse(raw);
-      } catch (e) {
-        errEl.textContent = 'JSON 파싱 오류: ' + e.message;
-        return;
-      }
-      if (!Array.isArray(items)) {
-        errEl.textContent = '최상위 값이 배열이어야 합니다.';
-        return;
-      }
-
-      // ② POST to /api/data
-      applyBtn.disabled = true;
-      applyBtn.textContent = '전송 중…';
-      try {
-        const resp = await fetch('/api/data', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify(items),
-        });
+        const resp = await fetch('/api/data/db');
         if (!resp.ok) throw new Error('서버 응답 오류 ' + resp.status);
-        document.getElementById('inputModal').classList.remove('open');
-        document.getElementById('patternName').textContent = '';
         await loadData();
       } catch (e) {
-        errEl.textContent = '전송 오류: ' + e.message;
+        document.getElementById('status').textContent = '오류: ' + e.message;
       } finally {
-        applyBtn.disabled = false;
-        applyBtn.textContent = '적용';
+        btn.disabled = false;
       }
     }
 
